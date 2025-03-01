@@ -1,0 +1,66 @@
+#pragma once
+
+#include <string>
+#include <sstream>
+#include <iomanip>
+#include <curl/curl.h>
+#include <filesystem>
+#include <nlohmann/json.hpp>
+#include <optional>
+
+inline std::time_t convert_google_time(std::string datetime) {
+    datetime.pop_back();
+    size_t dotPos = datetime.find('.');
+    datetime = datetime.substr(0, dotPos);
+    std::tm tm = {};
+    std::istringstream iss(datetime);
+    iss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
+    return timegm(&tm);
+}
+
+
+class FileLinkRecord {
+public:
+    FileLinkRecord(const std::filesystem::path& p, const std::string& t, const time_t& mt, const int g_id, const int c_id)
+        : type(t), modified_time(mt), global_id(g_id), cloud_id(c_id) {}
+    FileLinkRecord(){}
+    ~FileLinkRecord() {}
+    FileLinkRecord(const FileLinkRecord&) = delete;
+    FileLinkRecord(FileLinkRecord&& other) noexcept : type(other.type), modified_time(other.modified_time),
+        global_id(other.global_id), cloud_id(other.cloud_id), parent_id(other.parent_id), cloud_file_id(other.cloud_file_id) {
+    }
+    std::string type;
+    std::string cloud_file_id;
+    std::string parent_id;
+    std::time_t modified_time;
+    int cloud_id;
+    int global_id;
+};
+
+class CurlEasyHandle {
+public:
+    CurlEasyHandle()
+        : _curl(curl_easy_init()),
+        _mime(nullptr),
+        _headers(nullptr),
+        _responce("") {
+    }
+
+    ~CurlEasyHandle() {
+        if (_mime) {
+            curl_mime_free(_mime);
+        }
+        if (_headers) {
+            curl_slist_free_all(_headers);
+        }
+        curl_easy_cleanup(_curl);
+    }
+
+    CURL* _curl;
+    curl_mime* _mime;
+    curl_slist* _headers;
+    std::optional<FileLinkRecord> _file_info;
+    std::string _responce;
+    int retry_count = 0;
+    std::chrono::steady_clock::time_point timer;
+};
