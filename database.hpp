@@ -22,6 +22,7 @@ public:
     std::string get_cloud_file_id_by_cloud_id(const int cloud_id, const int global_id);
     std::vector<nlohmann::json> get_clouds();
     void update_file_link_one_field(const int cloud_id, const int global_id, const std::string& field, const std::string& new_str);
+    nlohmann::json get_cloud_file_info(const std::string& cloud_file_id, const int cloud_id);
 
 private:
     sqlite3* _db;

@@ -333,6 +333,36 @@ void Database::update_file_link_one_field(const int cloud_id, const int global_i
     }
 }
 
+nlohmann::json Database::get_cloud_file_info(const std::string& cloud_file_id, const int cloud_id) {
+    sqlite3_stmt* stmt = nullptr;
+    int rc = 0;
+
+    std::string sql = "SELECT global_id, cloud_parent_id, cloud_file_modified_time FROM file_links WHERE cloud_file_id = ? AND cloud_id = ? LIMIT 1;";
+    rc = sqlite3_prepare_v2(_db, sql.c_str(), -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("Failed to prepare statement get_cloud_file_info)");
+    }
+    sqlite3_bind_text(stmt, 1, cloud_file_id.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int64(stmt, 2, cloud_id);
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        std::cout << "No file_link found for given cloud_id: " << cloud_id << '\n';
+        return nlohmann::json::object();
+    }
+    nlohmann::json cloud_info;
+    cloud_info["global_id"] = sqlite3_column_int64(stmt, 0);
+    const std::string str = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+    cloud_info["cloud_parent_id"] = str;
+    cloud_info["cloud_file_modified_time"] = sqlite3_column_int64(stmt, 2);
+    
+    sqlite3_finalize(stmt);
+
+    return std::move(cloud_info);
+}
+
 
 
 

@@ -373,7 +373,7 @@ void SyncHandler::async_db_add_file_link() {
             _file_link_CV.wait(lock, [this] { return !_file_link_queue.empty() || _file_link_finished; });
 
             while (!_file_link_queue.empty() && batch.size() < batch_size) {
-                batch.push_back(std::move(_file_link_queue.front()));
+                batch.emplace_back(std::move(_file_link_queue.front()));
                 _file_link_queue.pop();
             }
 
@@ -394,16 +394,49 @@ void SyncHandler::sync() {
     std::thread changes_thread(&SyncHandler::async_procces_changes, this);
     int cloud_id = 1;
     for (const auto& cloud : _clouds) {
-        std::vector<nlohmann::json> vec = cloud->list_changes();
+        std::vector<nlohmann::json> pages = cloud->list_changes();
         {
             std::lock_guard<std::mutex> lock(_file_link_mutex);
-            for (auto& v : vec) {
-                _changes_queue.emplace(std::move(v));
+            for (const auto& page : pages) {
+                for (const auto& change : page) {
+                    nlohmann::json file_change;
+                    if (change.contains("file")) {
+                        file_change = change["file"];
+                    }
+                    else {
+                        throw std::runtime_error("weird change file: " + change.dump());
+                    }
+                    nlohmann::json tmp;
+                    if (file_change.contains("id")) {
+                        tmp["cloud_file_id"] = file_change["id"];
+                    }
+                    if (file_change.contains("mimeType")) {
+                        tmp["type"] = file_change["mimeType"] == "application/vnd.google-apps.folder" ? "dir" : "file";
+                    }
+                    if (file_change.contains("modifiedTime")) {
+                        tmp["cloud_file_modified_time"] = convert_google_time(file_change["modifiedTime"]);
+                    }
+                    if (file_change.contains("name")) {
+                        tmp["name"] = file_change["name"];
+                    }
+                    if (file_change.contains("parents")) {
+                        tmp["cloud_parent_id"] = file_change["parents"][0];
+                    }
+                    if (file_change.contains("trashed")) {
+                        tmp["deleted"] = file_change["trashed"];
+                    }
+                    tmp["cloud_id"] = cloud_id;
+                    std::cout << change << '\n' << tmp << '\n';
+                    _changes_queue.emplace(std::move(tmp));
+                    tmp.clear();
+                }
             }
         }
         _changes_CV.notify_one();
-        vec.clear();
+        pages.clear();
+        cloud_id++;
     }
+
     {
         std::lock_guard<std::mutex> lock(_changes_mutex);
         _changes_finished = true;
@@ -414,20 +447,43 @@ void SyncHandler::sync() {
 
 void SyncHandler::async_procces_changes() {
     std::unique_ptr<Database> db_conn = std::make_unique<Database>(_db_file_name);
-    int batch_size = 25;
-    std::vector<FileLinkRecord> batch{};
+    nlohmann::json curr_change;
     while (true) {
         {
             std::unique_lock<std::mutex> lock(_changes_mutex);
             _changes_CV.wait(lock, [this] { return !_changes_queue.empty() || _changes_finished; });
 
-            while (!_changes_queue.empty()) {
-                std::cout << _changes_queue.front() << '\n';
+            if (!_changes_queue.empty()) {
+                curr_change = std::move(_changes_queue.front());
                 _changes_queue.pop();
             }
 
         }
-        if (_changes_finished) {
+        if (!curr_change.empty()) {
+            nlohmann::json cloud_file_info = db_conn->get_cloud_file_info(curr_change["cloud_file_id"], curr_change["cloud_id"]);
+            if (cloud_file_info.empty()) {
+                // new file
+                // not our file
+            }
+            else { // can be different changes at the same time!!!!!!!!!
+                // file changed
+                    // file renamed
+                        // adding ?global_id? to ??MAP?? with rename tag + name + cloud
+                    // file REALLY changed
+                        // adding ?global_id? to ??MAP?? with changed tag + time + cloud
+                // file moved
+                    // adding ?global_id? to ??MAP?? with moved tag + parent + cloud
+                // file deleted
+                    // adding ?global_id? to ??MAP?? with deleted tag + cloud (time not changing at least in google)
+                // Nothing happend what really matters
+                    // just skipping
+            }
+
+            
+            curr_change.clear();
+        }
+        else if (_changes_finished) {
+            
             break;
         }
     }
