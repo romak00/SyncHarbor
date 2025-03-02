@@ -8,7 +8,8 @@ int main() {
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
     std::filesystem::path dir("/home/rk00/demo");
-    SyncHandler sh("conf1", dir, false);
+    bool IS_INTITIAL = true;
+    SyncHandler sh("conf1", dir, IS_INTITIAL);
 
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();

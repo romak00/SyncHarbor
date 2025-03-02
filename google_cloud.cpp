@@ -12,7 +12,7 @@ GoogleCloud::GoogleCloud(const std::string& client_id, const std::string& client
     //_refresh_token = first_time_auth();
     _access_token = getAccessToken();
     _home_dir_id = get_dir_id_by_path(home_dir);
-    _dir_id_map.emplace(home_dir, _home_dir_id);
+    _dir_id_map.emplace(".", _home_dir_id);
     //get_start_page_token();
     //list_changes();
 }
