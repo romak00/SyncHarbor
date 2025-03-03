@@ -21,17 +21,18 @@ inline std::time_t convert_google_time(std::string datetime) {
 
 class FileLinkRecord {
 public:
-    FileLinkRecord(const std::filesystem::path& p, const std::string& t, const time_t& mt, const int g_id, const int c_id)
-        : type(t), modified_time(mt), global_id(g_id), cloud_id(c_id) {}
+    FileLinkRecord(const std::filesystem::path& p, const std::string& t, const int g_id, const int c_id)
+        : type(t), global_id(g_id), cloud_id(c_id), hash_check_sum("NULL") {}
     FileLinkRecord(){}
     ~FileLinkRecord() {}
     FileLinkRecord(const FileLinkRecord&) = delete;
     FileLinkRecord(FileLinkRecord&& other) noexcept : type(other.type), modified_time(other.modified_time),
-        global_id(other.global_id), cloud_id(other.cloud_id), parent_id(other.parent_id), cloud_file_id(other.cloud_file_id) {
+        global_id(other.global_id), cloud_id(other.cloud_id), parent_id(other.parent_id), cloud_file_id(other.cloud_file_id), hash_check_sum(other.hash_check_sum){
     }
     std::string type;
     std::string cloud_file_id;
     std::string parent_id;
+    std::string hash_check_sum;
     std::time_t modified_time;
     int cloud_id;
     int global_id;

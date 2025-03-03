@@ -163,7 +163,7 @@ void Database::initial_add_file_links(const std::vector<FileLinkRecord>& files) 
         throw std::runtime_error("Failed to begin transaction add_file_links");
     }
     sqlite3_stmt* stmt = nullptr;
-    const std::string sql = "INSERT INTO file_links (global_id, cloud_id, cloud_file_id, cloud_parent_id, cloud_file_modified_time) VALUES (?, ?, ?, ?, ?);";
+    const std::string sql = "INSERT INTO file_links (global_id, cloud_id, cloud_file_id, cloud_parent_id, cloud_file_modified_time, cloud_hash_check_sum) VALUES (?, ?, ?, ?, ?, ?);";
     rc = sqlite3_prepare_v2(_db, sql.c_str(), -1, &stmt, nullptr);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(stmt);
@@ -179,6 +179,7 @@ void Database::initial_add_file_links(const std::vector<FileLinkRecord>& files) 
         sqlite3_bind_text(stmt, 3, file.cloud_file_id.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_text(stmt, 4, file.parent_id.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_int64(stmt, 5, static_cast<sqlite3_int64>(file.modified_time));
+        sqlite3_bind_text(stmt, 6, file.hash_check_sum.c_str(), -1, SQLITE_STATIC);
 
         rc = sqlite3_step(stmt);
         if (rc == SQLITE_BUSY) {
@@ -337,7 +338,7 @@ nlohmann::json Database::get_cloud_file_info(const std::string& cloud_file_id, c
     sqlite3_stmt* stmt = nullptr;
     int rc = 0;
 
-    std::string sql = "SELECT global_id, cloud_parent_id, cloud_file_modified_time FROM file_links WHERE cloud_file_id = ? AND cloud_id = ? LIMIT 1;";
+    std::string sql = "SELECT global_id, cloud_parent_id, cloud_file_modified_time, cloud_hash_check_sum FROM file_links WHERE cloud_file_id = ? AND cloud_id = ? LIMIT 1;";
     rc = sqlite3_prepare_v2(_db, sql.c_str(), -1, &stmt, nullptr);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(stmt);
@@ -354,10 +355,12 @@ nlohmann::json Database::get_cloud_file_info(const std::string& cloud_file_id, c
     }
     nlohmann::json cloud_info;
     cloud_info["global_id"] = sqlite3_column_int64(stmt, 0);
-    const std::string str = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-    cloud_info["cloud_parent_id"] = str;
+    const std::string parent = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+    cloud_info["cloud_parent_id"] = parent;
     cloud_info["cloud_file_modified_time"] = sqlite3_column_int64(stmt, 2);
-    
+    const std::string hash = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+    cloud_info["cloud_hash_check_sum"] = hash;
+
     sqlite3_finalize(stmt);
 
     return std::move(cloud_info);
@@ -404,6 +407,7 @@ void Database::create_tables() {
             cloud_id                  INTEGER NOT NULL,
             cloud_file_id             TEXT NOT NULL,
             cloud_parent_id           TEXT NOT NULL,
+            cloud_hash_check_sum      TEXT,
             cloud_file_modified_time  INTEGER,
             PRIMARY KEY (global_id, cloud_id),
             FOREIGN KEY(global_id) REFERENCES files(global_id),

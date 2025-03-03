@@ -104,7 +104,7 @@ void SyncHandler::initial_upload() {
             int global_id = _db->add_file(entry_path, "file", time);
             for (const auto& cloud : _clouds) {
                 std::unique_ptr<CurlEasyHandle> easy_handle = cloud->create_file_upload_handle(entry_path);
-                easy_handle->_file_info.emplace(entry_path, "file", time, global_id, cloud_id_2);
+                easy_handle->_file_info.emplace(entry_path, "file", global_id, cloud_id_2);
                 curl_easy_setopt(easy_handle->_curl, CURLOPT_SHARE, shared_handles[cloud_id_2-1]);
                 curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
                 curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(easy_handle->_responce));
@@ -119,7 +119,7 @@ void SyncHandler::initial_upload() {
             dirs_to_map.emplace_back(global_id, std::filesystem::relative(entry_path.parent_path(), _loc_path).string());
             for (const auto& cloud : _clouds) {
                 std::unique_ptr<CurlEasyHandle> easy_handle = cloud->create_dir_upload_handle(entry_path);
-                easy_handle->_file_info.emplace(entry_path, "dir", time, global_id, cloud_id_2);
+                easy_handle->_file_info.emplace(entry_path, "dir", global_id, cloud_id_2);
                 curl_easy_setopt(easy_handle->_curl, CURLOPT_SHARE, shared_handles[cloud_id_2-1]);
                 curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
                 curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(easy_handle->_responce));
@@ -341,7 +341,10 @@ void SyncHandler::async_curl_multi_files_worker() {
                     std::unique_ptr<CurlEasyHandle> patch_handle = _clouds[file_link_data.cloud_id-1]->patch_change_parent(file_link_data.cloud_file_id, rel_parent_path);
                     _small_curl_queue.emplace(std::move(patch_handle));
 
-                    file_link_data.parent_id = _clouds[file_link_data.cloud_id-1]->get_path_id_mapping(rel_parent_path);
+                    file_link_data.parent_id = _clouds[file_link_data.cloud_id - 1]->get_path_id_mapping(rel_parent_path);
+                    if (json_rsp.contains("md5Checksum")) {
+                        file_link_data.hash_check_sum = json_rsp["md5Checksum"];
+                    }
                     {
                         std::lock_guard<std::mutex> lock(_file_link_mutex);
                         _file_link_queue.emplace(std::move(file_link_data));
@@ -390,52 +393,39 @@ void SyncHandler::async_db_add_file_link() {
 }
 
 void SyncHandler::sync() {
+    std::shared_ptr<Database> db_shared_conn = std::make_shared<Database>(_db_file_name);
+
     _changes_finished = false;
     std::thread changes_thread(&SyncHandler::async_procces_changes, this);
+
+    std::unordered_map<std::string, nlohmann::json> all_changes;
+
     int cloud_id = 1;
     for (const auto& cloud : _clouds) {
-        std::vector<nlohmann::json> pages = cloud->list_changes();
-        {
-            std::lock_guard<std::mutex> lock(_file_link_mutex);
-            for (const auto& page : pages) {
-                for (const auto& change : page) {
-                    nlohmann::json file_change;
-                    if (change.contains("file")) {
-                        file_change = change["file"];
-                    }
-                    else {
-                        throw std::runtime_error("weird change file: " + change.dump());
-                    }
-                    nlohmann::json tmp;
-                    if (file_change.contains("id")) {
-                        tmp["cloud_file_id"] = file_change["id"];
-                    }
-                    if (file_change.contains("mimeType")) {
-                        tmp["type"] = file_change["mimeType"] == "application/vnd.google-apps.folder" ? "dir" : "file";
-                    }
-                    if (file_change.contains("modifiedTime")) {
-                        tmp["cloud_file_modified_time"] = convert_google_time(file_change["modifiedTime"]);
-                    }
-                    if (file_change.contains("name")) {
-                        tmp["name"] = file_change["name"];
-                    }
-                    if (file_change.contains("parents")) {
-                        tmp["cloud_parent_id"] = file_change["parents"][0];
-                    }
-                    if (file_change.contains("trashed")) {
-                        tmp["deleted"] = file_change["trashed"];
-                    }
-                    tmp["cloud_id"] = cloud_id;
-                    std::cout << change << '\n' << tmp << '\n';
-                    _changes_queue.emplace(std::move(tmp));
-                    tmp.clear();
+        std::vector<nlohmann::json> curr_cloud_changes = cloud->get_changes(cloud_id, db_shared_conn);
+        
+        for (const auto& change : curr_cloud_changes) {
+            if (all_changes.contains(change["file"])) {                                                                 // TODO more sound logic (now its stupid for transparency)
+                if (all_changes[change["file"]]["tag"] == "DELETED" && change["data"]["tag"] == "CHANGED") {            // if maybe both DELETED then dont delete on second one too?
+                    continue;                                                                                           // if both CHANGED choose one that newer?
+                }
+                else if (all_changes[change["file"]["data"]]["tag"] == "CHANGED" && change["data"]["tag"] == "DELETED") {
+                    all_changes[change["file"]] = change["data"];
+                    continue;
+                }
+                else{
+                    continue;
                 }
             }
+            else {
+                all_changes.emplace(change["file"], change["data"]);
+            }
         }
-        _changes_CV.notify_one();
-        pages.clear();
         cloud_id++;
     }
+
+
+
 
     {
         std::lock_guard<std::mutex> lock(_changes_mutex);
@@ -463,27 +453,57 @@ void SyncHandler::async_procces_changes() {
             nlohmann::json cloud_file_info = db_conn->get_cloud_file_info(curr_change["cloud_file_id"], curr_change["cloud_id"]);
             if (cloud_file_info.empty()) {
                 // new file
+                    // find where and what
+                        // find path + type + make global id
+                            // ...
                 // not our file
+                    // just skipping
             }
             else { // can be different changes at the same time!!!!!!!!!
                 // file changed
                     // file renamed
-                        // adding ?global_id? to ??MAP?? with rename tag + name + cloud
+                        // adding ?global_id? to ??MAP?? with rename tag + name + time + cloud
                     // file REALLY changed
-                        // adding ?global_id? to ??MAP?? with changed tag + time + cloud
+                        // adding ?global_id? to ??MAP?? with changed tag + time + hash + cloud
                 // file moved
                     // adding ?global_id? to ??MAP?? with moved tag + parent + cloud
                 // file deleted
                     // adding ?global_id? to ??MAP?? with deleted tag + cloud (time not changing at least in google)
                 // Nothing happend what really matters
                     // just skipping
-            }
 
+                }
+                if (curr_change["deleted"] == true) {
+                    // delete
+                    continue;
+                }
+                if (curr_change["cloud_file_modified_time"] > cloud_file_info["cloud_file_modified_time"]) {
+                    if (curr_change["type"] == "dir") {
+                        // check name
+                        // check parent
+                        // else skip
+                    }
+                    else {
+                        // check hash if not NULL
+                            // if changed => changed
+                            // if not check name
+                        // if hash NULL changed always + check name
+                    }
+                }
+                if (curr_change["cloud_parent_id"] != cloud_file_info["cloud_parent_id"]) {
+                    // check if new parent one of ours
+                        // then moved
+                    // if not ours, maybe its new dir
+                        // somehow check if this dir our new and if yes, moved
+                        // if not mark deleted
+                }
+                else {
+                    // skip
+                }
             
             curr_change.clear();
         }
         else if (_changes_finished) {
-            
             break;
         }
     }

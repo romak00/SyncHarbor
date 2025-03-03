@@ -8,7 +8,7 @@ int main() {
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
     std::filesystem::path dir("/home/rk00/demo");
-    bool IS_INTITIAL = true;
+    bool IS_INTITIAL = 0;
     SyncHandler sh("conf1", dir, IS_INTITIAL);
 
     auto end = std::chrono::high_resolution_clock::now();

@@ -96,7 +96,7 @@ std::unique_ptr<CurlEasyHandle> GoogleCloud::create_file_upload_handle(const std
     curl_mime_filedata(part, path.c_str());
     curl_mime_type(part, "application/octet-stream");
     
-    std::string url("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,modifiedTime");
+    std::string url("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,modifiedTime,md5Checksum");
     curl_easy_setopt(easy_handle->_curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
     curl_easy_setopt(easy_handle->_curl, CURLOPT_ACCEPT_ENCODING, "gzip, deflate");
     curl_easy_setopt(easy_handle->_curl, CURLOPT_URL, url.c_str());
@@ -118,7 +118,7 @@ std::unique_ptr<CurlEasyHandle> GoogleCloud::create_file_upload_handle(const std
 std::unique_ptr<CurlEasyHandle> GoogleCloud::create_dir_upload_handle(const std::filesystem::path& path) {
     std::unique_ptr<CurlEasyHandle> easy_handle = std::make_unique<CurlEasyHandle>();
 
-    const std::string url = "https://www.googleapis.com/drive/v3/files?fields=id,modifiedTime";
+    const std::string url = "https://www.googleapis.com/drive/v3/files?fields=id,modifiedTime,md5Checksum";
     
     nlohmann::json j;
     j["name"] = path.filename().string();
@@ -333,14 +333,14 @@ void GoogleCloud::get_start_page_token() {
     curl_easy_cleanup(curl);
 }
 
-std::vector<nlohmann::json> GoogleCloud::list_changes() {
+std::vector<nlohmann::json> GoogleCloud::get_changes(const int cloud_id, const std::shared_ptr<Database> db_conn) {
     CURL* curl = curl_easy_init();
     std::string response;
-    std::vector<nlohmann::json> list;
+    std::vector<nlohmann::json> pages;
 
     std::string url = "https://www.googleapis.com/drive/v3/changes?"
         "pageToken=" + _page_token + "&fields=newStartPageToken%2CnextPageToken%2C"
-        "changes%28file%28id%2Ctrashed%2Cname%2CmodifiedTime%2CmimeType%2Cparents%29%29"
+        "changes%28file%28id%2Ctrashed%2Cname%2CmodifiedTime%2CmimeType%2Cparents%2Cmd5Checksum%29%29"
         "&includeItemsFromAllDrives=false"
         "&includeRemoved=false"
         "&restrictToMyDrive=false"
@@ -357,7 +357,7 @@ std::vector<nlohmann::json> GoogleCloud::list_changes() {
     CURLcode res = curl_easy_perform(curl);
     auto changes = nlohmann::json::parse(response);
     while (changes.contains("nextPageToken")) {
-        list.push_back(changes["changes"]);
+        pages.push_back(changes["changes"]);
         response = "";
         changes.clear();
         _page_token = changes["nextPageToken"];
@@ -370,15 +370,120 @@ std::vector<nlohmann::json> GoogleCloud::list_changes() {
             "&supportsAllDrives=false";
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         CURLcode res = curl_easy_perform(curl);
-        auto changes = nlohmann::json::parse(response);
+        auto page = nlohmann::json::parse(response);
     }
+
     _page_token = changes["newStartPageToken"];
-    list.push_back(changes["changes"]);
+    pages.push_back(changes["changes"]);
+
+    std::vector<nlohmann::json> changes_vec;
+    for (const auto& page : pages) {
+        for (const auto& change : page) {
+            nlohmann::json file_change;
+            
+            if (change.contains("file")) {
+                file_change = change["file"];
+            }
+            else {
+                throw std::runtime_error("weird change file: " + change.dump());
+            }
+            
+            nlohmann::json cloud_file_info = db_conn->get_cloud_file_info(file_change["id"], cloud_id);
+            nlohmann::json change_template, data;
+            data["tag"] = "NULL";
+            data["cloud_id"] = cloud_id;
+            data["cloud_file_id"] = file_change["id"];
+            std::string tmp_type = file_change["mimeType"] == "application/vnd.google-apps.folder" ? "dir" : "file";
+            int mod_time = convert_google_time(file_change["modifiedTime"]);
+            data["cloud_file_modified_time"] = mod_time;
+            if (cloud_file_info.empty()) {
+                // new file
+                    // find where and what
+                    // find path + type + make global id
+                    // ...
+                nlohmann::json cloud_parent_info = db_conn->get_cloud_file_info(file_change["parents"][0], file_change["cloud_id"]);
+                if (!cloud_parent_info.empty()) {
+                    data["tag"] = "NEW";
+                    data["type"] = tmp_type;
+                    data["cloud_parent_id"] = file_change["parents"][0];
+                    data["cloud_hash_check_sum"] = file_change.contains("md5Checksum") ? file_change["md5Checksum"] : "NULL";
+                }
+                // not our file
+                    // just skipping
+                else {
+                    // TODO: consider where some "older" parent might be ours (need to make some kind of chain map??)
+                    continue;
+                }
+            }
+            // can be different changes at the same time!!!!!!!!!
+                // file changed
+                    // file renamed
+                        // adding ?global_id? to ??MAP?? with rename tag + name + time + cloud
+                    // file REALLY changed
+                        // adding ?global_id? to ??MAP?? with changed tag + time + hash + cloud
+                // file moved
+                    // adding ?global_id? to ??MAP?? with moved tag + parent + cloud
+                // file deleted
+                    // adding ?global_id? to ??MAP?? with deleted tag + cloud (time not changing at least in google)
+                // Nothing happend what really matters
+                    // just skipping
+
+            else if (file_change["trashed"] == true) {
+                // delete
+                data["tag"] = "DELETED";
+            }
+            else if (mod_time > cloud_file_info["cloud_file_modified_time"]) {
+                std::cout << "bebra" << '\n';
+                data["tag"] = "CHANGED";
+                if (file_change.contains("md5Checksum")) {
+                    if (file_change["md5Checksum"] != cloud_file_info["cloud_hash_check_sum"]) {
+                        data["changed"] = true;
+                        data["cloud_hash_check_sum"] = file_change["md5Checksum"];
+                    }
+                }
+                else {
+                    data["changed"] = true;
+                }
+                if (file_change["name"] != (db_conn->find_path_by_global_id(cloud_file_info["global_id"])).filename().string()) {
+                    data["renamed"] = true;
+                    data["name"] = file_change["name"];
+                }
+                if (file_change["parents"][0] != cloud_file_info["cloud_parent_id"]) {
+                    nlohmann::json cloud_parent_info = db_conn->get_cloud_file_info(file_change["parents"][0], file_change["cloud_id"]);
+                    if (!cloud_parent_info.empty()) {
+                        data["moved"] = true;
+                        data["cloud_parent_id"] = file_change["parents"][0];
+                    }
+                }
+            }                                                                                           // TODO same as before: if new parent is not ours
+            else if (file_change["parents"][0] != cloud_file_info["cloud_parent_id"]) {                 // check if its new or we moved file elsewhere
+                nlohmann::json cloud_parent_info = db_conn->get_cloud_file_info(file_change["parents"][0], file_change["cloud_id"]);
+                if (!cloud_parent_info.empty()) {
+                    data["tag"] = "CHANGED";
+                    data["moved"] = true;
+                    data["cloud_parent_id"] = file_change["parents"][0];
+                }
+            }
+            else {
+                continue;
+            }
+            if (data["tag"] != "NULL") {
+                file_change.clear();
+                change_template["data"] = data;
+                change_template["file"] = data["tag"] == "NEW" ?
+                    db_conn->find_path_by_global_id(cloud_file_info["global_id"]).string()
+                    : std::to_string(cloud_file_info["global_id"].get<int>());
+                std::cout << change_template << '\n';
+                changes_vec.emplace_back(std::move(change_template));
+                change_template.clear();
+            }
+        }
+    }
 
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
 
-    return std::move(list);
+    return std::move(changes_vec);
 }
 
 std::string GoogleCloud::post_upload() {

@@ -12,7 +12,7 @@ public:
     //void initial_config() override;
     std::unique_ptr<CurlEasyHandle> create_file_upload_handle(const std::filesystem::path& path) override;
     std::unique_ptr<CurlEasyHandle> create_dir_upload_handle(const std::filesystem::path& rel_path) override;
-    std::vector<nlohmann::json> list_changes() override;
+    std::vector<nlohmann::json> get_changes(const int cloud_id, std::shared_ptr<Database> db_conn) override;
     void return_dir_structure_batch();
     std::string post_upload() override;
     void insert_path_id_mapping(const std::string& path, const std::string& id) override;
