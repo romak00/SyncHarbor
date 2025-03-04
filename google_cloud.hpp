@@ -4,23 +4,24 @@
 #include <string>
 #include <iostream>
 
-class GoogleCloud : public BaseCloud {
+class GoogleDrive : public BaseCloud {
 public:
-    GoogleCloud(const std::string& client_id, const std::string& client_secret, const std::string& refresh_token, const std::filesystem::path& home_dir, const std::string& start_page_token);
-    GoogleCloud(const std::string& client_id, const std::string& client_secret, const std::string& refresh_token, const std::string& home_dir, const std::string& start_page_token);
+    GoogleDrive(const std::string& client_id, const std::string& client_secret, const std::string& refresh_token, const std::filesystem::path& home_dir, const std::string& start_page_token);
+    GoogleDrive(const std::string& client_id, const std::string& client_secret, const std::string& refresh_token, const std::string& home_dir, const std::string& start_page_token);
 
     //void initial_config() override;
     std::unique_ptr<CurlEasyHandle> create_file_upload_handle(const std::filesystem::path& path) override;
     std::unique_ptr<CurlEasyHandle> create_dir_upload_handle(const std::filesystem::path& rel_path) override;
     std::vector<nlohmann::json> get_changes(const int cloud_id, std::shared_ptr<Database> db_conn) override;
-    void return_dir_structure_batch();
     std::string post_upload() override;
     void insert_path_id_mapping(const std::string& path, const std::string& id) override;
     const std::string get_path_id_mapping(const std::string& path) const override;
-    void add_to_batch(const std::string& id, const std::string& path) override;
-    std::unique_ptr<CurlEasyHandle> patch_change_parent(const std::string& id, const std::string& path) override;
+    std::unique_ptr<CurlEasyHandle> create_metadata_update_handle(const std::string& id, const std::string& parent, const std::string& name = "") override;
     const std::string& get_home_dir_id() const override;
-    ~GoogleCloud();
+    std::unique_ptr<CurlEasyHandle> create_file_download_handle(const std::string& id, const std::filesystem::path& path) override;
+    std::unique_ptr<CurlEasyHandle> create_file_update_handle(const std::string& id, const std::filesystem::path& path, const std::string& name, const std::string& parent_id) override;
+    std::unique_ptr<CurlEasyHandle> create_file_delete_handle(const std::string& id) override;
+    ~GoogleDrive();
     
 private:
     std::string get_dir_id_by_path(const std::filesystem::path& path);

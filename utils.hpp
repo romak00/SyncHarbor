@@ -1,5 +1,6 @@
 #pragma once
 
+#include <fstream>
 #include <string>
 #include <sstream>
 #include <iomanip>
@@ -21,7 +22,7 @@ inline std::time_t convert_google_time(std::string datetime) {
 
 class FileLinkRecord {
 public:
-    FileLinkRecord(const std::filesystem::path& p, const std::string& t, const int g_id, const int c_id)
+    FileLinkRecord(const std::string& t, const int g_id, const int c_id)
         : type(t), global_id(g_id), cloud_id(c_id), hash_check_sum("NULL") {}
     FileLinkRecord(){}
     ~FileLinkRecord() {}
@@ -62,6 +63,8 @@ public:
     curl_slist* _headers;
     std::optional<FileLinkRecord> _file_info;
     std::string _responce;
-    int retry_count = 0;
     std::chrono::steady_clock::time_point timer;
+    int retry_count = 0;
+    std::optional<std::ofstream> _ofc;
+    std::string type;
 };

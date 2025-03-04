@@ -21,8 +21,13 @@ public:
     std::filesystem::path find_path_by_global_id(const int search_global_id);
     std::string get_cloud_file_id_by_cloud_id(const int cloud_id, const int global_id);
     std::vector<nlohmann::json> get_clouds();
+    std::string get_cloud_parent_id_by_cloud_id(const int cloud_id, const std::string& cloud_file_id);
     void update_file_link_one_field(const int cloud_id, const int global_id, const std::string& field, const std::string& new_str);
+    void update_file_one_field(const int global_id, const std::string& field, const std::time_t& time);
     nlohmann::json get_cloud_file_info(const std::string& cloud_file_id, const int cloud_id);
+    void add_file_link(const int global_id, const int cloud_id, const std::string& hash, const std::string& parent_id, const int mod_time, const std::string& cloud_file_id);
+    void update_file_link(const int cloud_id, const int global_id, const std::string& hash, const int mod_time, const std::string& parent_id);
+    void delete_file_and_links(const int global_id);
 
 private:
     sqlite3* _db;
