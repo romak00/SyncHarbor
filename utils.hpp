@@ -9,7 +9,7 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 
-inline std::time_t convert_google_time(std::string datetime) {
+inline std::time_t convert_cloud_time(std::string datetime) {
     datetime.pop_back();
     size_t dotPos = datetime.find('.');
     datetime = datetime.substr(0, dotPos);
@@ -22,14 +22,16 @@ inline std::time_t convert_google_time(std::string datetime) {
 
 class FileLinkRecord {
 public:
-    FileLinkRecord(const std::string& t, const int g_id, const int c_id)
-        : type(t), global_id(g_id), cloud_id(c_id), hash_check_sum("NULL") {}
+    FileLinkRecord(const std::string& t, const int g_id, const int c_id, const std::string parent, const std::filesystem::path& p)
+        : type(t), global_id(g_id), cloud_id(c_id), parent_id(parent), path(p), hash_check_sum("NULL") {}
+    
     FileLinkRecord(){}
     ~FileLinkRecord() {}
     FileLinkRecord(const FileLinkRecord&) = delete;
     FileLinkRecord(FileLinkRecord&& other) noexcept : type(other.type), modified_time(other.modified_time),
-        global_id(other.global_id), cloud_id(other.cloud_id), parent_id(other.parent_id), cloud_file_id(other.cloud_file_id), hash_check_sum(other.hash_check_sum){
+        global_id(other.global_id), cloud_id(other.cloud_id), parent_id(other.parent_id), cloud_file_id(other.cloud_file_id), hash_check_sum(other.hash_check_sum), path(other.path){
     }
+    std::filesystem::path path;
     std::string type;
     std::string cloud_file_id;
     std::string parent_id;
@@ -49,6 +51,12 @@ public:
     }
 
     ~CurlEasyHandle() {
+        if (_ofc && _ofc->is_open()) {
+            _ofc->close();
+        }
+        if (_ifc && _ifc->is_open()) {
+            _ifc->close();
+        }
         if (_mime) {
             curl_mime_free(_mime);
         }
@@ -56,6 +64,7 @@ public:
             curl_slist_free_all(_headers);
         }
         curl_easy_cleanup(_curl);
+        
     }
 
     CURL* _curl;
@@ -66,5 +75,6 @@ public:
     std::chrono::steady_clock::time_point timer;
     int retry_count = 0;
     std::optional<std::ofstream> _ofc;
+    std::optional<std::ifstream> _ifc;
     std::string type;
 };

@@ -12,20 +12,18 @@ inline static size_t write_data(void* ptr, size_t size, size_t nmemb, void* user
     return size * nmemb;
 }
 
-GoogleDrive::GoogleDrive(const std::string& client_id, const std::string& client_secret, const std::string& refresh_token, const std::filesystem::path& home_dir, const std::string& start_page_token)
-    : _client_id(client_id), _client_secret(client_secret), _refresh_token(refresh_token), _page_token(start_page_token) {
+GoogleDrive::GoogleDrive(const std::string& client_id, const std::string& client_secret, const std::string& refresh_token, const std::filesystem::path& home_dir)
+    : _client_id(client_id), _client_secret(client_secret), _refresh_token(refresh_token) {
     
     //_refresh_token = first_time_auth();
-    _access_token = getAccessToken();
-    _home_dir_id = get_dir_id_by_path(home_dir);
+    _access_token = GoogleDrive::getAccessToken();
+    _home_dir_id = GoogleDrive::get_dir_id_by_path(home_dir);
     _dir_id_map.emplace(".", _home_dir_id);
-    //get_start_page_token();
-    //list_changes();
 }
 GoogleDrive::GoogleDrive(const std::string& client_id, const std::string& client_secret, const std::string& refresh_token, const std::string& home_dir, const std::string& start_page_token)
     : _client_id(client_id), _client_secret(client_secret), _refresh_token(refresh_token), _page_token(start_page_token) {
 
-    _access_token = getAccessToken();
+    _access_token = GoogleDrive::getAccessToken();
 }
 
 
@@ -87,13 +85,21 @@ std::string GoogleDrive::get_dir_id_by_path(const std::filesystem::path& path) {
     return std::move(parent_id);
 }
 
-std::unique_ptr<CurlEasyHandle> GoogleDrive::create_file_upload_handle(const std::filesystem::path& path) {
+std::unique_ptr<CurlEasyHandle> GoogleDrive::create_file_upload_handle(const std::filesystem::path& path, const std::string& parent) {
     std::unique_ptr<CurlEasyHandle> easy_handle = std::make_unique<CurlEasyHandle>();
     if (!easy_handle->_curl) {
         throw std::runtime_error("Error initializing curl create_file_upload_handle");
     }
+    std::string parent_id;
+    if (_dir_id_map.empty()) {
+        parent_id = parent;
+    }
+    else {
+        parent_id = _dir_id_map[parent];
+    }
     nlohmann::json j;
     j["name"] = path.filename().string();
+    j["parents"] = { parent_id };
     std::string metadata = j.dump();
 
     easy_handle->_mime = curl_mime_init(easy_handle->_curl);
@@ -125,10 +131,13 @@ std::unique_ptr<CurlEasyHandle> GoogleDrive::create_file_upload_handle(const std
 
     curl_easy_setopt(easy_handle->_curl, CURLOPT_VERBOSE, 0L);
 
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(easy_handle->_responce));
+
     return std::move(easy_handle);
 }
 
-std::unique_ptr<CurlEasyHandle> GoogleDrive::create_dir_upload_handle(const std::filesystem::path& path) {
+std::unique_ptr<CurlEasyHandle> GoogleDrive::create_dir_upload_handle(const std::filesystem::path& path, const std::string& parent) {
     std::unique_ptr<CurlEasyHandle> easy_handle = std::make_unique<CurlEasyHandle>();
     if (!easy_handle->_curl) {
         throw std::runtime_error("Error initializing curl create_dir_upload_handle");
@@ -138,6 +147,9 @@ std::unique_ptr<CurlEasyHandle> GoogleDrive::create_dir_upload_handle(const std:
     nlohmann::json j;
     j["name"] = path.filename().string();
     j["mimeType"] = "application/vnd.google-apps.folder";
+    if (parent != "") {
+        j["parents"] = { parent };
+    }
     std::string json_data = j.dump();
 
     struct curl_slist* headers = nullptr;
@@ -157,6 +169,9 @@ std::unique_ptr<CurlEasyHandle> GoogleDrive::create_dir_upload_handle(const std:
     curl_easy_setopt(easy_handle->_curl, CURLOPT_COPYPOSTFIELDS, json_data.c_str());
     curl_easy_setopt(easy_handle->_curl, CURLOPT_SSL_SESSIONID_CACHE, 1L);
     curl_easy_setopt(easy_handle->_curl, CURLOPT_FOLLOWLOCATION, 1L);
+
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(easy_handle->_responce));
 
     return std::move(easy_handle);
 }
@@ -185,29 +200,68 @@ std::unique_ptr<CurlEasyHandle> GoogleDrive::create_file_delete_handle(const std
     curl_easy_setopt(easy_handle->_curl, CURLOPT_SSL_SESSIONID_CACHE, 1L);
     curl_easy_setopt(easy_handle->_curl, CURLOPT_FOLLOWLOCATION, 1L);
 
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(easy_handle->_responce));
+
     return std::move(easy_handle);
 }
 
-std::unique_ptr<CurlEasyHandle> GoogleDrive::create_metadata_update_handle(const std::string& id, const std::string& parent, const std::string& name) {
+std::unique_ptr<CurlEasyHandle> GoogleDrive::create_name_update_handle(const std::string& id, const std::string& name) {
+    std::unique_ptr<CurlEasyHandle> easy_handle = std::make_unique<CurlEasyHandle>();
+    if (!easy_handle->_curl) {
+        throw std::runtime_error("Error initializing curl create_metadata_update_handle");
+    }
+    
+    std::string url = "https://www.googleapis.com/drive/v3/files/" + id;
+    
+    nlohmann::json j;
+    j["name"] = name;
+    std::string data = j.dump();
+    
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, ("Authorization: Bearer " + _access_token).c_str());
+    headers = curl_slist_append(headers, "Content-Type: application/json; charset=UTF-8");
+    easy_handle->_headers = headers;
+    
+    easy_handle->type = "metadata_update";
+    
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_COPYPOSTFIELDS, data.c_str());
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_HTTPHEADER, easy_handle->_headers);
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_CUSTOMREQUEST, "PATCH");
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_ACCEPT_ENCODING, "gzip, deflate");
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_SSL_SESSIONID_CACHE, 1L);
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_FOLLOWLOCATION, 1L);
+
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(easy_handle->_responce));
+
+    return std::move(easy_handle);
+}
+
+std::unique_ptr<CurlEasyHandle> GoogleDrive::create_parent_update_handle(const std::string& id, const std::string& parent, const std::string& parent_to_remove) {
     std::unique_ptr<CurlEasyHandle> easy_handle = std::make_unique<CurlEasyHandle>();
     if (!easy_handle->_curl) {
         throw std::runtime_error("Error initializing curl create_metadata_update_handle");
     }
 
-    std::string parent_id = _dir_id_map.empty() ? parent : _dir_id_map[parent];
-
-    std::string url = "https://www.googleapis.com/drive/v3/files/" + id + "?fields=parents";
-
-    nlohmann::json j;
-    j["parents"] = { parent_id };
-    if (name != "") {
-        j["name"] = name;
-        url += ",name";
+    std::string parent_id, remove_parent_id = "root";
+    if (parent_to_remove == "") {
+        parent_id = _dir_id_map[parent];
     }
-    std::string data = j.dump();
+    else {
+        parent_id = parent;
+        remove_parent_id = parent_to_remove;
+    }
+
+    std::string url = "https://www.googleapis.com/drive/v3/files/" + id +
+        "?addParents=" + parent_id +
+        "&removeParents=" + remove_parent_id;
+
+
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, ("Authorization: Bearer " + _access_token).c_str());
-    headers = curl_slist_append(headers, "Content-Type: application/json; charset=UTF-8");
     easy_handle->_headers = headers;
 
     easy_handle->type = "metadata_update";
@@ -215,11 +269,13 @@ std::unique_ptr<CurlEasyHandle> GoogleDrive::create_metadata_update_handle(const
     curl_easy_setopt(easy_handle->_curl, CURLOPT_HTTPHEADER, easy_handle->_headers);
     curl_easy_setopt(easy_handle->_curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(easy_handle->_curl, CURLOPT_CUSTOMREQUEST, "PATCH");
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_COPYPOSTFIELDS, data.c_str());
     curl_easy_setopt(easy_handle->_curl, CURLOPT_ACCEPT_ENCODING, "gzip, deflate");
     curl_easy_setopt(easy_handle->_curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
     curl_easy_setopt(easy_handle->_curl, CURLOPT_SSL_SESSIONID_CACHE, 1L);
     curl_easy_setopt(easy_handle->_curl, CURLOPT_FOLLOWLOCATION, 1L);
+
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(easy_handle->_responce));
 
     return std::move(easy_handle);
 }
@@ -239,27 +295,32 @@ void GoogleDrive::generateAuthURL() {
 std::string GoogleDrive::getRefreshToken(const std::string& auth_code) {
     CURL* curl = curl_easy_init();
     std::string response;
-
-    if (curl) {
-        std::string postFields = "code=" + auth_code +
-            "&client_id=" + _client_id +
-            "&client_secret=" + _client_secret +
-            "&redirect_uri=http://localhost" +
-            "&grant_type=authorization_code";
-
-        curl_easy_setopt(curl, CURLOPT_URL, "https://oauth2.googleapis.com/token");
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postFields.c_str());
-
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-
-        CURLcode res = curl_easy_perform(curl);
-        if (res != CURLE_OK) {
-            std::cerr << "Error: " << curl_easy_strerror(res) << std::endl;
-        }
-
-        curl_easy_cleanup(curl);
+    if (!curl) {
+        throw std::runtime_error("Error init curl GoogleDrive get_refresh_token");
     }
+
+    
+    std::string post_fields = "code=" + auth_code +
+        "&client_id=" + _client_id +
+        "&client_secret=" + _client_secret +
+        "&redirect_uri=http://localhost" +
+        "&grant_type=authorization_code";
+
+    curl_easy_setopt(curl, CURLOPT_URL, "https://oauth2.googleapis.com/token");
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_fields.c_str());
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+    CURLcode res = curl_easy_perform(curl);
+    if (res != CURLE_OK) {
+        curl_easy_cleanup(curl);
+        throw std::runtime_error("Error getting refresh token GoogleDrive get_refresh_token");
+    }
+
+    curl_easy_cleanup(curl);
+
 
     auto json_response = nlohmann::json::parse(response);
     std::string refresh_token = json_response["refresh_token"];
@@ -315,7 +376,7 @@ std::string GoogleDrive::first_time_auth() {
     generateAuthURL();
     std::string auth_code = "";
     std::cin >> auth_code;
-    std::string refresh_token = getRefreshToken(auth_code);
+    std::string refresh_token = GoogleDrive::getRefreshToken(auth_code);
 
     return refresh_token;
 }
@@ -395,22 +456,18 @@ std::vector<nlohmann::json> GoogleDrive::get_changes(const int cloud_id, const s
             else {
                 throw std::runtime_error("weird change file: " + change.dump());
             }
-            
+            std::cout << file_change << '\n';
             nlohmann::json cloud_file_info = db_conn->get_cloud_file_info(file_change["id"], cloud_id);
             nlohmann::json change_template, data;
             data["tag"] = "NULL";
             data["cloud_id"] = cloud_id;
             data["cloud_file_id"] = file_change["id"];
             std::string tmp_type = file_change["mimeType"] == "application/vnd.google-apps.folder" ? "dir" : "file";
-            int mod_time = convert_google_time(file_change["modifiedTime"]);
+            int mod_time = convert_cloud_time(file_change["modifiedTime"]);
             data["cloud_file_modified_time"] = mod_time;
             data["cloud_hash_check_sum"] = "NULL";
-            if (cloud_file_info.empty()) {
-                // new file
-                // find where and what
-                    // find path + type + make global id
-                    // ...
-                    nlohmann::json cloud_parent_info;
+            if (cloud_file_info.empty() && file_change["trashed"] == false) {
+                nlohmann::json cloud_parent_info;
                 if (file_change.contains("parents")) {
                     cloud_parent_info = db_conn->get_cloud_file_info(file_change["parents"][0], data["cloud_id"]);
                 }
@@ -429,21 +486,7 @@ std::vector<nlohmann::json> GoogleDrive::get_changes(const int cloud_id, const s
                     continue;
                 }
             }
-            // can be different changes at the same time!!!!!!!!!
-                // file changed
-                    // file renamed
-                        // adding ?global_id? to ??MAP?? with rename tag + name + time + cloud
-                    // file REALLY changed
-                        // adding ?global_id? to ??MAP?? with changed tag + time + hash + cloud
-                // file moved
-                    // adding ?global_id? to ??MAP?? with moved tag + parent + cloud
-                // file deleted
-                    // adding ?global_id? to ??MAP?? with deleted tag + cloud (time not changing at least in google)
-                // Nothing happend what really matters
-                    // just skipping
-
             else if (file_change["trashed"] == true) {
-                // delete
                 data["tag"] = "DELETED";
                 data["global_id"] = cloud_file_info["global_id"];
             }
@@ -466,14 +509,15 @@ std::vector<nlohmann::json> GoogleDrive::get_changes(const int cloud_id, const s
                     data["renamed"] = true;
                 }
                 if (file_change["parents"][0] != cloud_file_info["cloud_parent_id"]) {
-                    nlohmann::json cloud_parent_info = db_conn->get_cloud_file_info(file_change["parents"][0], file_change["cloud_id"]);
+                    nlohmann::json cloud_parent_info = db_conn->get_cloud_file_info(file_change["parents"][0], cloud_id);
                     if (!cloud_parent_info.empty()) {
                         data["moved"] = true;
                     }
                 }
             }                                                                                           // TODO same as before: if new parent is not ours
             else if (file_change["parents"][0] != cloud_file_info["cloud_parent_id"]) {                 // check if its new or we moved file elsewhere
-                nlohmann::json cloud_parent_info = db_conn->get_cloud_file_info(file_change["parents"][0], file_change["cloud_id"]);
+                nlohmann::json cloud_parent_info = db_conn->get_cloud_file_info(file_change["parents"][0], cloud_id);
+                std::cout << file_change << '\n' << cloud_parent_info << '\n';
                 if (!cloud_parent_info.empty()) {
                     data["global_id"] = cloud_file_info["global_id"];
                     data["tag"] = "CHANGED";
@@ -515,7 +559,7 @@ std::unique_ptr<CurlEasyHandle> GoogleDrive::create_file_download_handle(const s
     easy_handle->_headers = headers;
     easy_handle->type = "file_download";
 
-    easy_handle->_ofc.emplace(path.parent_path().string() + "-tmp-copy-cloudsync-" + path.filename().string(), std::ios::binary);
+    easy_handle->_ofc.emplace(path.parent_path().string() + "/-tmp-copy-cloudsync-" + path.filename().string(), std::ios::binary);
     if (easy_handle->_ofc && easy_handle->_ofc->is_open()) {
         curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(*easy_handle->_ofc));
     }
@@ -537,7 +581,7 @@ std::unique_ptr<CurlEasyHandle> GoogleDrive::create_file_download_handle(const s
     return std::move(easy_handle);
 }
 
-std::unique_ptr<CurlEasyHandle> GoogleDrive::create_file_update_handle(const std::string& id, const std::filesystem::path& path, const std::string& name, const std::string& parent_id) {
+std::unique_ptr<CurlEasyHandle> GoogleDrive::create_file_update_handle(const std::string& id, const std::filesystem::path& path, const std::string& name) {
     std::unique_ptr<CurlEasyHandle> easy_handle = std::make_unique<CurlEasyHandle>();
     if (!easy_handle->_curl) {
         throw std::runtime_error("Error initializing curl create_file_update_handle");
@@ -546,7 +590,6 @@ std::unique_ptr<CurlEasyHandle> GoogleDrive::create_file_update_handle(const std
 
     nlohmann::json j;
     j["name"] = name;
-    j["parents"] = { parent_id };
     std::string metadata = j.dump();
 
     easy_handle->_mime = curl_mime_init(easy_handle->_curl);
@@ -578,6 +621,9 @@ std::unique_ptr<CurlEasyHandle> GoogleDrive::create_file_update_handle(const std
 
     curl_easy_setopt(easy_handle->_curl, CURLOPT_VERBOSE, 0L);
 
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(easy_handle->_responce));
+
     return std::move(easy_handle);
 }
 
@@ -588,4 +634,12 @@ std::string GoogleDrive::post_upload() {
 
 const std::string& GoogleDrive::get_home_dir_id() const {
     return _home_dir_id;
+}
+
+void GoogleDrive::procces_responce(FileLinkRecord& file_info, const nlohmann::json& responce) {
+    file_info.modified_time = convert_cloud_time(responce["modifiedTime"]);
+    file_info.cloud_file_id = responce["id"];
+    if (responce.contains("md5Checksum")) {
+        file_info.hash_check_sum = responce["md5Checksum"];
+    }
 }

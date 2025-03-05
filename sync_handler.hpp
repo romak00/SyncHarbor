@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include "google_cloud.hpp"
+#include "dropbox.hpp"
 #include <curl/curl.h>
 #include "database.hpp"
 #include <sstream>
@@ -11,6 +12,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <thread>
+#include <random>
 
 class SyncHandler {
 public:
@@ -28,7 +30,7 @@ private:
     void check_delayed_requests(const std::string& type);
     void schedule_retry(std::unique_ptr<CurlEasyHandle> easy_handle);
 
-    std::vector<std::unique_ptr<BaseCloud>> _clouds;
+    std::unordered_map<int, std::unique_ptr<BaseCloud>> _clouds;
     const std::string _db_file_name;
     const std::filesystem::path _loc_path;
     std::unique_ptr<Database> _db;

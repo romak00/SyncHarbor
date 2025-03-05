@@ -25,18 +25,25 @@ SyncHandler::SyncHandler(const std::string config_name, const std::filesystem::p
             std::string type = cloud["type"];
             const nlohmann::json cloud_data = cloud["data"];
             const std::filesystem::path dir_path(cloud_data["dir"]);
-            _db->add_cloud(name, type, cloud_data);
-            if (type == "GoogleDrive") {
+            int cloud_id = _db->add_cloud(name, type, cloud_data);
+            /* if (type == "GoogleDrive") {
                 _clouds.emplace_back(
                     std::make_unique<GoogleDrive>(
                         cloud_data["client_id"],
                         cloud_data["client_secret"],
                         cloud_data["refresh_token"],
-                        dir_path,
-                        cloud_data["start_page_token"]));
-                }
+                        dir_path));
+            } */
+            if (type == "Dropbox") {
+                _clouds.emplace(cloud_id,
+                    std::make_unique<Dropbox>(
+                        cloud_data["client_id"],
+                        cloud_data["client_secret"],
+                        cloud_data["refresh_token"],
+                        dir_path));
             }
-        std::cout << "bebra" << '\n';
+        }
+
         initial_upload();
     }
     else {
@@ -47,24 +54,22 @@ SyncHandler::SyncHandler(const std::string config_name, const std::filesystem::p
             const std::string type = cloud["type"];
             const nlohmann::json cloud_data = cloud["config_data"];
             const std::string dir_id = cloud_data["dir"];
-            _clouds.resize(clouds.size());
             if (type == "GoogleDrive") {
-                _clouds[cloud_id - 1] =
+                _clouds.emplace(cloud_id,
                     std::make_unique<GoogleDrive>(
                         cloud_data["client_id"],
                         cloud_data["client_secret"],
                         cloud_data["refresh_token"],
                         dir_id,
-                        cloud_data["start_page_token"]);
+                        cloud_data["start_page_token"]));
             }
-            else if (type == "DropBox") {
+            else if (type == "Dropbox") {
                 
             }
             else if (type == "OneDrive") {
                 
             }
         }
-        std::cout << "bebra not" << '\n';
         sync();
     }
 
@@ -82,16 +87,16 @@ void SyncHandler::initial_upload() {
     std::thread multi_worker_dirs(&SyncHandler::async_curl_multi_small_worker, this);
     _file_link_finished = false;
     std::thread dir_link_adder(&SyncHandler::async_db_add_file_link, this);
-    std::vector<std::pair<int, std::string>> dirs_to_map;
+    std::vector<std::pair<int, std::filesystem::path>> dirs_to_map;
+    std::vector<std::pair<int, std::filesystem::path>> files_to_map;
 
     std::vector<CURLSH*> shared_handles;
-    int cloud_id = 1;
-    for (const auto& cloud : _clouds) {
+
+    for (const auto& [cloud_id, cloud] : _clouds) {
         CURLSH* shared_handle = curl_share_init();
         curl_share_setopt(shared_handle, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
         curl_share_setopt(shared_handle, CURLSHOPT_SHARE, CURL_LOCK_DATA_SSL_SESSION);
         shared_handles.emplace_back(std::move(shared_handle));
-        cloud_id++;
     }
 
     for (const auto& entry : std::filesystem::recursive_directory_iterator(_loc_path)) {
@@ -100,36 +105,23 @@ void SyncHandler::initial_upload() {
         const auto stime = std::chrono::clock_cast<std::chrono::system_clock>(ftime);
         const auto time = std::chrono::system_clock::to_time_t(stime);
         if (entry.is_regular_file()) {
-            int cloud_id_2 = 1;
             int global_id = _db->add_file(entry_path, "file", time);
-            for (const auto& cloud : _clouds) {
-                std::unique_ptr<CurlEasyHandle> easy_handle = cloud->create_file_upload_handle(entry_path);
-                easy_handle->_file_info.emplace("file", global_id, cloud_id_2);
-                curl_easy_setopt(easy_handle->_curl, CURLOPT_SHARE, shared_handles[cloud_id_2-1]);
-                curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-                curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(easy_handle->_responce));
-                
-                _files_curl_queue.emplace(std::move(easy_handle));
-                cloud_id_2++;
-            }
+            files_to_map.emplace_back(global_id, entry_path);
         }
         else if (entry.is_directory()) {
-            int cloud_id_2 = 1;
             int global_id = _db->add_file(entry_path, "dir", time);
-            dirs_to_map.emplace_back(global_id, std::filesystem::relative(entry_path.parent_path(), _loc_path).string());
-            for (const auto& cloud : _clouds) {
-                std::unique_ptr<CurlEasyHandle> easy_handle = cloud->create_dir_upload_handle(entry_path);
-                easy_handle->_file_info.emplace("dir", global_id, cloud_id_2);
-                curl_easy_setopt(easy_handle->_curl, CURLOPT_SHARE, shared_handles[cloud_id_2-1]);
-                curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-                curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(easy_handle->_responce));
-
-                {
-                    std::lock_guard<std::mutex> lock(_small_curl_mutex);
-                    _small_curl_queue.emplace(std::move(easy_handle));
+            dirs_to_map.emplace_back(global_id, entry_path);
+            for (const auto& [cloud_id, cloud] : _clouds) {
+                std::unique_ptr<CurlEasyHandle> easy_handle = cloud->create_dir_upload_handle(std::filesystem::relative(entry_path, _loc_path));
+                if (easy_handle) {
+                    easy_handle->_file_info.emplace("dir", global_id, cloud_id, "root", std::filesystem::relative(entry_path, _loc_path));
+                    curl_easy_setopt(easy_handle->_curl, CURLOPT_SHARE, shared_handles[cloud_id-1]);
+                    {
+                        std::lock_guard<std::mutex> lock(_small_curl_mutex);
+                        _small_curl_queue.emplace(std::move(easy_handle));
+                    }
+                    _small_curl_CV.notify_one();
                 }
-                _small_curl_CV.notify_one();
-                cloud_id_2++;
             }
         }
     }
@@ -141,49 +133,60 @@ void SyncHandler::initial_upload() {
     _file_link_CV.notify_all();
     dir_link_adder.join();
 
-    std::cout << "finished dirs" << '\n';
-
     _file_link_finished = false;
     std::thread file_link_adder(&SyncHandler::async_db_add_file_link, this);
+
+    _small_curl_finished = false;
+    std::thread multi_worker_patch(&SyncHandler::async_curl_multi_small_worker, this);
+
+    for (const auto& [cloud_id, cloud] : _clouds) {
+        if (_db->get_cloud_type(cloud_id) == "GoogleDrive") {
+            for (const auto& dir_id_path_pair : dirs_to_map) {
+                std::string rel_parent_path = std::filesystem::relative(dir_id_path_pair.second.parent_path(), _loc_path).string();
+                std::string cloud_file_id = _db->get_cloud_file_id_by_cloud_id(cloud_id, dir_id_path_pair.first);
+                std::unique_ptr<CurlEasyHandle> patch_handle = cloud->create_parent_update_handle(cloud_file_id, rel_parent_path);
+                curl_easy_setopt(patch_handle->_curl, CURLOPT_SHARE, shared_handles[cloud_id - 1]);
+                _small_curl_queue.emplace(std::move(patch_handle));
+                _db->update_file_link_one_field(cloud_id, dir_id_path_pair.first, "cloud_parent_id", cloud->get_path_id_mapping(rel_parent_path));
+            }
+        }
+        for (const auto& file_id_path_pair : files_to_map) {
+            std::string rel_parent_path = std::filesystem::relative(file_id_path_pair.second.parent_path(), _loc_path).string();
+            std::unique_ptr<CurlEasyHandle> easy_handle = cloud->create_file_upload_handle(file_id_path_pair.second, rel_parent_path);
+            easy_handle->_file_info.emplace("file", file_id_path_pair.first, cloud_id, cloud->get_path_id_mapping(rel_parent_path), file_id_path_pair.second);
+            curl_easy_setopt(easy_handle->_curl, CURLOPT_SHARE, shared_handles[cloud_id-1]);
+            _files_curl_queue.emplace(std::move(easy_handle));
+        }
+    }
+    dirs_to_map.clear();
+    files_to_map.clear();
+
+    _small_curl_finished = true;
+    _small_curl_CV.notify_all();
+    multi_worker_patch.join();
+
+    std::cout << "finished dirs" << '\n';
 
     _files_curl_finished = false;
     std::thread multi_worker_files(&SyncHandler::async_curl_multi_files_worker, this);
 
-    cloud_id = 1;
-    for (const auto& cloud : _clouds) {
-        for (const auto& dir_id_path_pair : dirs_to_map) {
-            std::string cloud_file_id = _db->get_cloud_file_id_by_cloud_id(cloud_id, dir_id_path_pair.first);
-            std::unique_ptr<CurlEasyHandle> patch_handle = cloud->create_metadata_update_handle(cloud_file_id, dir_id_path_pair.second);
-            _small_curl_queue.emplace(std::move(patch_handle));
-            _db->update_file_link_one_field(cloud_id, dir_id_path_pair.first, "cloud_parent_id", cloud->get_path_id_mapping(dir_id_path_pair.second));
-        }
-        cloud_id++;
-    }
-
     _files_curl_finished = true;
     _files_curl_CV.notify_all();
     multi_worker_files.join();
+
     std::cout << "finished files" << '\n';
-
-    std::thread multi_worker_patch(&SyncHandler::async_curl_multi_small_worker, this);
-
-    _small_curl_CV.notify_all();
-    multi_worker_patch.join();
-
 
     for (auto& shared_handle : shared_handles) {
         curl_share_cleanup(shared_handle);
     }
     curl_global_cleanup();
 
-    cloud_id = 1;
-    for (const auto& cloud : _clouds) {
+    for (const auto& [cloud_id, cloud] : _clouds) {
         std::string pt = cloud->post_upload();
         nlohmann::json cloud_data = _db->get_cloud_config(cloud_id);
         cloud_data["start_page_token"] = pt;
         cloud_data["dir"] = cloud->get_home_dir_id();
         _db->update_cloud_data(cloud_id, cloud_data);
-        cloud_id++;
     }
 
     _file_link_finished = true;
@@ -196,7 +199,7 @@ void SyncHandler::async_curl_multi_small_worker() {
     CURLM* multi_handle = curl_multi_init();
     int still_running = 0;
     _small_active_count = 0;
-    while (!_small_curl_finished || !_small_curl_queue.empty() || still_running > 0) {
+    while (!_small_curl_finished || !_small_curl_queue.empty() || still_running > 0 || !_delayed_vec.empty()) {
         {
             std::unique_lock<std::mutex> lock(_small_curl_mutex);
             _small_curl_CV.wait(lock, [this] { return !_small_curl_queue.empty() || _small_curl_finished; });
@@ -247,21 +250,22 @@ void SyncHandler::async_curl_multi_small_worker() {
                     schedule_retry(std::move(_active_handles_map[easy]));
                     _active_handles_map.erase(easy);
                 }
+                else if (http_code != 200) {
+                    std::cout << "http code: " << http_code << '\n';
+                    std::cout << "small responce: " << _active_handles_map[easy]->_responce << '\n';
+                }
                 /* else if (upload_incomplete) {                                             <-------- TODO resumable upload
                     ...
                 } */
                 else if (_active_handles_map[easy]->_file_info.has_value()) {
-                    nlohmann::json json_rsp = nlohmann::json::parse(_active_handles_map[easy]->_responce);
+                    std::cout << "small responce: " << _active_handles_map[easy]->_responce << '\n';
                     FileLinkRecord file_link_data(std::move(*_active_handles_map[easy]->_file_info));
-                    file_link_data.cloud_file_id = json_rsp["id"];
-                    file_link_data.parent_id = "root";
-                    file_link_data.modified_time = convert_google_time(json_rsp["modifiedTime"]);
-
-                    _clouds[file_link_data.cloud_id - 1]->insert_path_id_mapping(
-                        std::filesystem::relative(_db->find_path_by_global_id(file_link_data.global_id),_loc_path),
+                    _clouds[file_link_data.cloud_id]->procces_responce(file_link_data, nlohmann::json::parse(_active_handles_map[easy]->_responce));
+                    if (file_link_data.parent_id == "root") {
+                        _clouds[file_link_data.cloud_id]->insert_path_id_mapping(
+                            std::filesystem::relative(_db->find_path_by_global_id(file_link_data.global_id), _loc_path),
                             file_link_data.cloud_file_id);
-
-
+                    }
                     {
                         std::lock_guard<std::mutex> lock(_file_link_mutex);
                         _file_link_queue.emplace(std::move(file_link_data));
@@ -282,7 +286,7 @@ void SyncHandler::async_curl_multi_files_worker() {
     CURLM* multi_handle = curl_multi_init();
     int still_running = 0;
     _files_active_count = 0;
-    while (!_files_curl_finished || !_files_curl_queue.empty() || still_running > 0) {
+    while (!_files_curl_finished || !_files_curl_queue.empty() || still_running > 0 || !_delayed_vec.empty()) {
         {
             std::unique_lock<std::mutex> lock(_files_curl_mutex);
             _files_curl_CV.wait(lock, [this] { return !_files_curl_queue.empty() || _files_curl_finished; });
@@ -300,7 +304,7 @@ void SyncHandler::async_curl_multi_files_worker() {
             std::cerr << "curl_multi_perform() failed, code: " << mc << '\n';
             break;
         }
-
+        
         int numfds = 0;
         mc = curl_multi_wait(multi_handle, nullptr, 0, 100, &numfds);
         if (mc != CURLM_OK) {
@@ -310,6 +314,7 @@ void SyncHandler::async_curl_multi_files_worker() {
         CURLMsg* msg;
         int msgs_left;
         while ((msg = curl_multi_info_read(multi_handle, &msgs_left))) {
+            std::cout << "HERE" << '\n';
             if (msg->msg == CURLMSG_DONE) {
                 CURL* easy = msg->easy_handle;
                 curl_multi_remove_handle(multi_handle, easy);
@@ -330,21 +335,15 @@ void SyncHandler::async_curl_multi_files_worker() {
                     schedule_retry(std::move(_active_handles_map[easy]));
                     _active_handles_map.erase(easy);
                 }
+                else if (http_code != 200) {
+                    std::cout << "http code: " << http_code << '\n';
+                    std::cout << "files responce: " << _active_handles_map[easy]->_responce << '\n';
+                }
                 else if (_active_handles_map[easy]->_file_info.has_value()) {
-                    nlohmann::json json_rsp = nlohmann::json::parse(_active_handles_map[easy]->_responce);
+                    std::cout  << "file responce: " << _active_handles_map[easy]->_responce << '\n';
                     FileLinkRecord file_link_data(std::move(*_active_handles_map[easy]->_file_info));
-                    file_link_data.cloud_file_id = json_rsp["id"];
-                    file_link_data.modified_time = convert_google_time(json_rsp["modifiedTime"]);
-                    std::filesystem::path path(_db->find_path_by_global_id(file_link_data.global_id));
-                    std::string rel_parent_path = std::filesystem::relative(path.parent_path(), _loc_path).string();
-
-                    std::unique_ptr<CurlEasyHandle> patch_handle = _clouds[file_link_data.cloud_id-1]->create_metadata_update_handle(file_link_data.cloud_file_id, rel_parent_path);
-                    _small_curl_queue.emplace(std::move(patch_handle));
-
-                    file_link_data.parent_id = _clouds[file_link_data.cloud_id - 1]->get_path_id_mapping(rel_parent_path);
-                    if (json_rsp.contains("md5Checksum")) {
-                        file_link_data.hash_check_sum = json_rsp["md5Checksum"];
-                    }
+                    _clouds[file_link_data.cloud_id]->procces_responce(file_link_data, nlohmann::json::parse(_active_handles_map[easy]->_responce));
+                    
                     {
                         std::lock_guard<std::mutex> lock(_file_link_mutex);
                         _file_link_queue.emplace(std::move(file_link_data));
@@ -397,12 +396,10 @@ void SyncHandler::sync() {
 
     std::unordered_map<std::string, nlohmann::json> all_changes;
 
-    int cloud_id = 1;
-    for (const auto& cloud : _clouds) {
+    for (const auto& [cloud_id, cloud] : _clouds) {
         std::vector<nlohmann::json> curr_cloud_changes = cloud->get_changes(cloud_id, db_shared_conn);
 
         for (const auto& change : curr_cloud_changes) {
-            std::cout << change << '\n';
             if (all_changes.contains(change["file"])) {                                                                 // TODO more sound logic (now its stupid for transparency)
                 if (all_changes[change["file"]]["tag"] == "DELETED" && change["data"]["tag"] == "CHANGED") {            // if maybe both DELETED then dont delete on second one too?
                     continue;                                                                                           // if both CHANGED choose one that newer?
@@ -411,7 +408,7 @@ void SyncHandler::sync() {
                     all_changes[change["file"]] = change["data"];
                     continue;
                 }
-                else{
+                else {
                     continue;
                 }
             }
@@ -419,17 +416,14 @@ void SyncHandler::sync() {
                 all_changes.emplace(change["file"], change["data"]);
             }
         }
-        cloud_id++;
     }
 
     std::vector<CURLSH*> shared_handles;
-    cloud_id = 1;
-    for (const auto& cloud : _clouds) {
+    for (const auto& [cloud_id, cloud] : _clouds) {
         CURLSH* shared_handle = curl_share_init();
         curl_share_setopt(shared_handle, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
         curl_share_setopt(shared_handle, CURLSHOPT_SHARE, CURL_LOCK_DATA_SSL_SESSION);
         shared_handles.emplace_back(std::move(shared_handle));
-        cloud_id++;
     }
 
     _small_curl_finished = false;
@@ -437,43 +431,42 @@ void SyncHandler::sync() {
     std::cout << all_changes.size() << '\n';
     for (const auto& [file, data] : all_changes) {
         std::cout << file << " " << data << '\n';
-        cloud_id = data["cloud_id"];
-        std::filesystem::path path(file);
+        int cloud_id = data["cloud_id"];
         if (data["tag"] == "NEW") {
-            int global_id = _db->add_file(file, data["type"], 0);
+            std::filesystem::path path(file);
+            int parent_global_id = _db->get_global_id_by_cloud_id(cloud_id, data["cloud_parent_id"]);
+            int global_id = _db->add_file(path, data["type"], 0);
             _db->add_file_link(global_id, cloud_id, data["cloud_hash_check_sum"], data["cloud_parent_id"], data["cloud_file_modified_time"], data["cloud_file_id"]);
             if (data["type"] == "file") {
-                std::unique_ptr<CurlEasyHandle> download_handle = _clouds[cloud_id - 1]->create_file_download_handle(data["cloud_file_id"], file);
+                std::unique_ptr<CurlEasyHandle> download_handle = _clouds[cloud_id]->create_file_download_handle(data["cloud_file_id"], path);
                 curl_easy_setopt(download_handle->_curl, CURLOPT_SHARE, shared_handles[cloud_id - 1]);
                 {
                     std::lock_guard<std::mutex> lock(_small_curl_mutex);
                     _small_curl_queue.emplace(std::move(download_handle));
                 }
                 _small_curl_CV.notify_one();
-                for (int i = 0; i < _clouds.size(); ++i) {
-                    if (i != cloud_id - 1) {
-                        std::unique_ptr<CurlEasyHandle> easy_handle = _clouds[i]->create_file_upload_handle(file);
-                        easy_handle->_file_info.emplace(data["type"], global_id, i + 1);
-                        curl_easy_setopt(easy_handle->_curl, CURLOPT_SHARE, shared_handles[i + 1]);
-                        curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-                        curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(easy_handle->_responce));
+                for (const auto& [_cloud_id, cloud] : _clouds) {
+                    if (_cloud_id != cloud_id) {
+                        std::string parent_cloud_id = _db->get_cloud_file_id_by_cloud_id(_cloud_id, parent_global_id);
+                        std::unique_ptr<CurlEasyHandle> easy_handle = cloud->create_file_upload_handle(path, parent_cloud_id);
+                        easy_handle->_file_info.emplace(data["type"], global_id, _cloud_id, parent_cloud_id, "");
+                        curl_easy_setopt(easy_handle->_curl, CURLOPT_SHARE, shared_handles[_cloud_id - 1]);
                         _files_curl_queue.emplace(std::move(easy_handle));
                     }
                 }
             }
             else {
-                std::filesystem::create_directory(file);
+                std::filesystem::create_directory(path);
                 const auto ftime = std::filesystem::last_write_time(file);
                 const auto stime = std::chrono::clock_cast<std::chrono::system_clock>(ftime);
                 const auto time = std::chrono::system_clock::to_time_t(stime);
-                _db->update_file_one_field(global_id, "local_modified_time", time);
-                for (int i = 0; i < _clouds.size(); ++i) {
-                    if (i != cloud_id - 1) {
-                        std::unique_ptr<CurlEasyHandle> easy_handle = _clouds[i]->create_dir_upload_handle(file);
-                        easy_handle->_file_info.emplace(data["type"], global_id, i + 1);
-                        curl_easy_setopt(easy_handle->_curl, CURLOPT_SHARE, shared_handles[i + 1]);
-                        curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-                        curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(easy_handle->_responce));
+                _db->update_file_time(global_id, "local_modified_time", time);
+                for (const auto& [_cloud_id, cloud] : _clouds) {
+                    if (_cloud_id != cloud_id) {
+                        std::string parent_cloud_id = _db->get_cloud_file_id_by_cloud_id(_cloud_id, parent_global_id);
+                        std::unique_ptr<CurlEasyHandle> easy_handle = cloud->create_dir_upload_handle(path, parent_cloud_id);
+                        easy_handle->_file_info.emplace(data["type"], global_id, _cloud_id, parent_cloud_id, "");
+                        curl_easy_setopt(easy_handle->_curl, CURLOPT_SHARE, shared_handles[_cloud_id - 1]);
                         {
                             std::lock_guard<std::mutex> lock(_small_curl_mutex);
                             _small_curl_queue.emplace(std::move(easy_handle));
@@ -485,42 +478,23 @@ void SyncHandler::sync() {
         }
         else if (data["tag"] == "CHANGED") {
             int global_id = data["global_id"];
+            std::filesystem::path path = _db->find_path_by_global_id(global_id);
             bool is_changed = data.contains("changed");
             bool is_renamed = data.contains("renamed");
             bool is_moved = data.contains("moved");
 
             _db->update_file_link(cloud_id, global_id, data["cloud_hash_check_sum"], data["cloud_file_modified_time"], data["cloud_parent_id"]);
 
-            if (is_changed) {
-                std::unique_ptr<CurlEasyHandle> download_handle = _clouds[cloud_id - 1]->create_file_download_handle(data["cloud_file_id"], path);
-                curl_easy_setopt(download_handle->_curl, CURLOPT_SHARE, shared_handles[cloud_id - 1]);
-                {
-                    std::lock_guard<std::mutex> lock(_small_curl_mutex);
-                    _small_curl_queue.emplace(std::move(download_handle));
-                }
-                _small_curl_CV.notify_one();
-                for (int i = 0; i < _clouds.size(); ++i) {
-                    if (i != cloud_id - 1) {
-                        std::string cloud_file_id = _db->get_cloud_file_id_by_cloud_id(i+1, global_id);
-                        std::string cloud_parent_id = _db->get_cloud_parent_id_by_cloud_id(i+1, cloud_file_id);
-                        std::unique_ptr<CurlEasyHandle> update_handle = _clouds[i]->create_file_update_handle(cloud_file_id, path, data["name"], cloud_parent_id);
-                        curl_easy_setopt(update_handle->_curl, CURLOPT_SHARE, shared_handles[i + 1]);
-                        curl_easy_setopt(update_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-                        curl_easy_setopt(update_handle->_curl, CURLOPT_WRITEDATA, &(update_handle->_responce));
-                        _files_curl_queue.emplace(std::move(update_handle));
-                    }
-                }
-            }
-            else {
-                std::cout << "HERE" << '\n';
-                for (int i = 0; i < _clouds.size(); ++i) {
-                    if (i != cloud_id - 1) {
-                        std::string cloud_file_id = _db->get_cloud_file_id_by_cloud_id(i+1, global_id);
-                        std::string cloud_parent_id = _db->get_cloud_parent_id_by_cloud_id(i+1, cloud_file_id);
-                        std::unique_ptr<CurlEasyHandle> metadata_handle = _clouds[i]->create_metadata_update_handle(cloud_file_id, cloud_parent_id, data["name"]);
-                        curl_easy_setopt(metadata_handle->_curl, CURLOPT_SHARE, shared_handles[i + 1]);
-                        curl_easy_setopt(metadata_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-                        curl_easy_setopt(metadata_handle->_curl, CURLOPT_WRITEDATA, &(metadata_handle->_responce));
+            if (is_renamed) {
+                std::filesystem::path old_path = path;
+                std::filesystem::path path = old_path.parent_path().string() + "/" + data["name"].get<std::string>();
+                std::filesystem::rename(old_path, path);
+                _db->update_file_path(global_id, "path", path.string());
+                for (const auto& [_cloud_id, cloud] : _clouds) {
+                    if (_cloud_id != cloud_id) {
+                        std::string cloud_file_id = _db->get_cloud_file_id_by_cloud_id(_cloud_id, global_id);
+                        std::unique_ptr<CurlEasyHandle> metadata_handle = cloud->create_name_update_handle(cloud_file_id, data["name"]);
+                        curl_easy_setopt(metadata_handle->_curl, CURLOPT_SHARE, shared_handles[_cloud_id - 1]);
                         {
                             std::lock_guard<std::mutex> lock(_small_curl_mutex);
                             _small_curl_queue.emplace(std::move(metadata_handle));
@@ -529,117 +503,79 @@ void SyncHandler::sync() {
                     }
                 }
             }
+            if (is_moved) {
+                int new_parent_global_id = _db->get_global_id_by_cloud_id(cloud_id, data["cloud_parent_id"]);
+                std::filesystem::path old_path = path;
+                std::filesystem::path path = _db->find_path_by_global_id(new_parent_global_id).string() + "/" + data["name"].get<std::string>();
+                std::filesystem::rename(old_path, path);
+                _db->update_file_path(global_id, "path", path.string());
+                for (const auto& [_cloud_id, cloud] : _clouds) {
+                    if (_cloud_id != cloud_id) {
+                        std::string cloud_file_id = _db->get_cloud_file_id_by_cloud_id(_cloud_id, global_id);
+                        std::string new_parent_cloud_id = _db->get_cloud_file_id_by_cloud_id(_cloud_id, new_parent_global_id);
+                        std::string old_parent_cloud_id = _db->get_cloud_parent_id_by_cloud_id(_cloud_id, cloud_file_id);
+                        std::unique_ptr<CurlEasyHandle> metadata_handle = cloud->create_parent_update_handle(cloud_file_id, new_parent_cloud_id, old_parent_cloud_id);
+                        curl_easy_setopt(metadata_handle->_curl, CURLOPT_SHARE, shared_handles[_cloud_id - 1]);
+                        {
+                            std::lock_guard<std::mutex> lock(_small_curl_mutex);
+                            _small_curl_queue.emplace(std::move(metadata_handle));
+                        }
+                        _small_curl_CV.notify_one();
+                    }
+                }
+            }
+            if (is_changed) {
+                std::unique_ptr<CurlEasyHandle> download_handle = _clouds[cloud_id - 1]->create_file_download_handle(data["cloud_file_id"], path);
+                curl_easy_setopt(download_handle->_curl, CURLOPT_SHARE, shared_handles[cloud_id - 1]);
+                {
+                    std::lock_guard<std::mutex> lock(_small_curl_mutex);
+                    _small_curl_queue.emplace(std::move(download_handle));
+                }
+                _small_curl_CV.notify_one();
+                for (const auto& [_cloud_id, cloud] : _clouds) {
+                    if (_cloud_id != cloud_id) {
+                        std::string cloud_file_id = _db->get_cloud_file_id_by_cloud_id(_cloud_id, global_id);
+                        std::unique_ptr<CurlEasyHandle> update_handle = cloud->create_file_update_handle(cloud_file_id, path, data["name"]);
+                        curl_easy_setopt(update_handle->_curl, CURLOPT_SHARE, shared_handles[_cloud_id - 1]);
+                        _files_curl_queue.emplace(std::move(update_handle));
+                    }
+                }
+            }
         }
         else if (data["tag"] == "DELETED") {
             int global_id = data["global_id"];
             std::filesystem::remove(file);
-            for (int i = 0; i < _clouds.size(); ++i) {
-                std::string cloud_file_id = _db->get_cloud_file_id_by_cloud_id(i+1, global_id);
-                std::unique_ptr<CurlEasyHandle> delete_handle = _clouds[i]->create_file_delete_handle(cloud_file_id);
-                curl_easy_setopt(delete_handle->_curl, CURLOPT_SHARE, shared_handles[i + 1]);
-                curl_easy_setopt(delete_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-                curl_easy_setopt(delete_handle->_curl, CURLOPT_WRITEDATA, &(delete_handle->_responce));
-                {
-                    std::lock_guard<std::mutex> lock(_small_curl_mutex);
-                    _small_curl_queue.emplace(std::move(delete_handle));
-                }
-                _small_curl_CV.notify_one();
-            }
-            _db->delete_file_and_links(global_id);
-        }
-    }
-
-    std::cout << "HERE" << '\n';
-
-    _small_curl_finished = true;
-    _small_curl_CV.notify_all();
-    multi_worker_small.join();
-
-    _files_curl_finished = false;
-    std::thread multi_worker_files(&SyncHandler::async_curl_multi_files_worker, this);
-
-    _files_curl_finished = true;
-    _files_curl_CV.notify_all();
-    multi_worker_files.join();
-    std::cout << "finished files" << '\n';
-
-    for (auto& shared_handle : shared_handles) {
-        curl_share_cleanup(shared_handle);
-    }
-    curl_global_cleanup();
-}
-
-void SyncHandler::async_procces_changes() {
-    std::unique_ptr<Database> db_conn = std::make_unique<Database>(_db_file_name);
-    nlohmann::json curr_change;
-    while (true) {
-        {
-            std::unique_lock<std::mutex> lock(_changes_mutex);
-            _changes_CV.wait(lock, [this] { return !_changes_queue.empty() || _changes_finished; });
-
-            if (!_changes_queue.empty()) {
-                curr_change = std::move(_changes_queue.front());
-                _changes_queue.pop();
-            }
-
-        }
-        if (!curr_change.empty()) {
-            nlohmann::json cloud_file_info = db_conn->get_cloud_file_info(curr_change["cloud_file_id"], curr_change["cloud_id"]);
-            if (cloud_file_info.empty()) {
-                // new file
-                    // find where and what
-                        // find path + type + make global id
-                            // ...
-                // not our file
-                    // just skipping
-            }
-            else { // can be different changes at the same time!!!!!!!!!
-                // file changed
-                    // file renamed
-                        // adding ?global_id? to ??MAP?? with rename tag + name + time + cloud
-                    // file REALLY changed
-                        // adding ?global_id? to ??MAP?? with changed tag + time + hash + cloud
-                // file moved
-                    // adding ?global_id? to ??MAP?? with moved tag + parent + cloud
-                // file deleted
-                    // adding ?global_id? to ??MAP?? with deleted tag + cloud (time not changing at least in google)
-                // Nothing happend what really matters
-                    // just skipping
-
-                }
-                if (curr_change["deleted"] == true) {
-                    // delete
-                    continue;
-                }
-                if (curr_change["cloud_file_modified_time"] > cloud_file_info["cloud_file_modified_time"]) {
-                    if (curr_change["type"] == "dir") {
-                        // check name
-                        // check parent
-                        // else skip
+            for (const auto& [_cloud_id, cloud] : _clouds) {
+                if (_cloud_id != cloud_id) {
+                    std::string cloud_file_id = _db->get_cloud_file_id_by_cloud_id(_cloud_id, global_id);
+                    std::unique_ptr<CurlEasyHandle> delete_handle = cloud->create_file_delete_handle(cloud_file_id);
+                    curl_easy_setopt(delete_handle->_curl, CURLOPT_SHARE, shared_handles[_cloud_id - 1]);
+                    {
+                        std::lock_guard<std::mutex> lock(_small_curl_mutex);
+                        _small_curl_queue.emplace(std::move(delete_handle));
                     }
-                    else {
-                        // check hash if not NULL
-                            // if changed => changed
-                            // if not check name
-                        // if hash NULL changed always + check name
-                    }
+                    _small_curl_CV.notify_one();
                 }
-                if (curr_change["cloud_parent_id"] != cloud_file_info["cloud_parent_id"]) {
-                    // check if new parent one of ours
-                        // then moved
-                    // if not ours, maybe its new dir
-                        // somehow check if this dir our new and if yes, moved
-                        // if not mark deleted
-                }
-                else {
-                    // skip
-                }
-            
-            curr_change.clear();
+                _db->delete_file_and_links(global_id);
+            }
         }
-        else if (_changes_finished) {
-            break;
+
+        _small_curl_finished = true;
+        _small_curl_CV.notify_all();
+        multi_worker_small.join();
+
+        _files_curl_finished = false;
+        std::thread multi_worker_files(&SyncHandler::async_curl_multi_files_worker, this);
+
+        _files_curl_finished = true;
+        _files_curl_CV.notify_all();
+        multi_worker_files.join();
+        std::cout << "finished files" << '\n';
+
+        for (auto& shared_handle : shared_handles) {
+            curl_share_cleanup(shared_handle);
         }
+        curl_global_cleanup();
     }
 }
 
@@ -694,8 +630,15 @@ void SyncHandler::check_delayed_requests(const std::string& type) {
 
 void SyncHandler::schedule_retry(std::unique_ptr<CurlEasyHandle> easy_handle) {
     int BASE_DELAY = 500;
-    int delay = BASE_DELAY * (1 << easy_handle->retry_count);
-    
+    int delay = BASE_DELAY * (1 << easy_handle->retry_count + 1);
+
+    int jitter_range = easy_handle->retry_count * BASE_DELAY;
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    std::uniform_int_distribution<int> dist(-jitter_range, jitter_range);
+
+    delay += dist(gen);
+
     auto delay_timer = std::chrono::steady_clock::now() + std::chrono::milliseconds(delay);
     easy_handle->timer = delay_timer;
     _delayed_vec.emplace_back(std::move(easy_handle));

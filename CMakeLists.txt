@@ -22,8 +22,7 @@ add_executable(${PROJECT_NAME}
     database.cpp
     google_cloud.cpp
     sync_handler.cpp
-    utils.cpp
-    
+    dropbox.cpp
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
