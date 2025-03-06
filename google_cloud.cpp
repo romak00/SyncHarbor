@@ -463,6 +463,7 @@ std::vector<nlohmann::json> GoogleDrive::get_changes(const int cloud_id, const s
             data["cloud_id"] = cloud_id;
             data["cloud_file_id"] = file_change["id"];
             std::string tmp_type = file_change["mimeType"] == "application/vnd.google-apps.folder" ? "dir" : "file";
+            data["type"] = tmp_type;
             int mod_time = convert_cloud_time(file_change["modifiedTime"]);
             data["cloud_file_modified_time"] = mod_time;
             data["cloud_hash_check_sum"] = "NULL";
@@ -473,7 +474,6 @@ std::vector<nlohmann::json> GoogleDrive::get_changes(const int cloud_id, const s
                 }
                 if (!cloud_parent_info.empty()) {
                     data["tag"] = "NEW";
-                    data["type"] = tmp_type;
                     data["cloud_parent_id"] = file_change["parents"][0];
                     data["cloud_hash_check_sum"] = file_change.contains("md5Checksum") ? file_change["md5Checksum"] : "NULL";
                     std::string tmp_str = db_conn->find_path_by_global_id(cloud_parent_info["global_id"]).string();
@@ -490,15 +490,15 @@ std::vector<nlohmann::json> GoogleDrive::get_changes(const int cloud_id, const s
                 data["tag"] = "DELETED";
                 data["global_id"] = cloud_file_info["global_id"];
             }
-            else if (mod_time > cloud_file_info["cloud_file_modified_time"]) {
+            else if (mod_time > cloud_file_info["cloud_file_modified_time"] || file_change["name"] != (db_conn->find_path_by_global_id(cloud_file_info["global_id"])).filename().string()) {
                 data["tag"] = "CHANGED";
                 data["global_id"] = cloud_file_info["global_id"];
                 data["cloud_parent_id"] = file_change["parents"][0];
                 data["name"] = file_change["name"];
                 if (file_change.contains("md5Checksum")) {
+                    data["cloud_hash_check_sum"] = file_change["md5Checksum"];
                     if (file_change["md5Checksum"] != cloud_file_info["cloud_hash_check_sum"]) {
                         data["changed"] = true;
-                        data["cloud_hash_check_sum"] = file_change["md5Checksum"];
                     }
                 }
                 else if (tmp_type == "file") {
@@ -517,7 +517,6 @@ std::vector<nlohmann::json> GoogleDrive::get_changes(const int cloud_id, const s
             }                                                                                           // TODO same as before: if new parent is not ours
             else if (file_change["parents"][0] != cloud_file_info["cloud_parent_id"]) {                 // check if its new or we moved file elsewhere
                 nlohmann::json cloud_parent_info = db_conn->get_cloud_file_info(file_change["parents"][0], cloud_id);
-                std::cout << file_change << '\n' << cloud_parent_info << '\n';
                 if (!cloud_parent_info.empty()) {
                     data["global_id"] = cloud_file_info["global_id"];
                     data["tag"] = "CHANGED";
@@ -530,6 +529,7 @@ std::vector<nlohmann::json> GoogleDrive::get_changes(const int cloud_id, const s
                 continue;
             }
             if (data["tag"] != "NULL") {
+                std::cout << file_change << '\n' << data << '\n';
                 file_change.clear();
                 change_template["data"] = data;
                 change_template["file"] = data["tag"] == "NEW" ?

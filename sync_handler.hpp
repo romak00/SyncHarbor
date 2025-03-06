@@ -22,9 +22,8 @@ public:
 
 private:
     void initial_upload();
-    void async_db_add_file_link();
     void sync();
-    void async_procces_changes();
+    void async_db_add_file_link();
     void async_curl_multi_small_worker();
     void async_curl_multi_files_worker();
     void check_delayed_requests(const std::string& type);

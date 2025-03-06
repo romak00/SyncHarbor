@@ -7,6 +7,7 @@
 class Dropbox : public BaseCloud {
 public:
     Dropbox(const std::string& client_id, const std::string& client_secret, const std::string& access_token, const std::filesystem::path& home_dir);
+    Dropbox(const std::string& client_id, const std::string& client_secret, const std::string& refresh_token, const std::filesystem::path& home_dir, const std::string& start_page_token);
 
     std::unique_ptr<CurlEasyHandle> create_file_upload_handle(const std::filesystem::path& path, const std::string& parent = "") override;
     std::unique_ptr<CurlEasyHandle> create_dir_upload_handle(const std::filesystem::path& path, const std::string& parent = "") override;

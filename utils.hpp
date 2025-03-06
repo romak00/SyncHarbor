@@ -29,7 +29,7 @@ public:
     ~FileLinkRecord() {}
     FileLinkRecord(const FileLinkRecord&) = delete;
     FileLinkRecord(FileLinkRecord&& other) noexcept : type(other.type), modified_time(other.modified_time),
-        global_id(other.global_id), cloud_id(other.cloud_id), parent_id(other.parent_id), cloud_file_id(other.cloud_file_id), hash_check_sum(other.hash_check_sum), path(other.path){
+        global_id(other.global_id), cloud_id(other.cloud_id), parent_id(other.parent_id), cloud_file_id(other.cloud_file_id), hash_check_sum(other.hash_check_sum), path(other.path), info(other.info){
     }
     std::filesystem::path path;
     std::string type;
@@ -39,6 +39,8 @@ public:
     std::time_t modified_time;
     int cloud_id;
     int global_id;
+
+    std::string info;
 };
 
 class CurlEasyHandle {

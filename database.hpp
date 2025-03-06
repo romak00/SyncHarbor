@@ -29,7 +29,7 @@ public:
     void update_file_path(const int global_id, const std::string& field, const std::string& path);
     nlohmann::json get_cloud_file_info(const std::string& cloud_file_id, const int cloud_id);
     void add_file_link(const int global_id, const int cloud_id, const std::string& hash, const std::string& parent_id, const int mod_time, const std::string& cloud_file_id);
-    void update_file_link(const int cloud_id, const int global_id, const std::string& hash, const int mod_time, const std::string& parent_id);
+    void update_file_link(const int cloud_id, const int global_id, const std::string& hash, const int mod_time, const std::string& parent_id, const std::string& cloud_file_id);
     void delete_file_and_links(const int global_id);
 
 private:

@@ -356,6 +356,7 @@ std::string Database::get_cloud_file_id_by_cloud_id(const int cloud_id, const in
     }
     sqlite3_bind_int64(stmt, 1, cloud_id);
     sqlite3_bind_int64(stmt, 2, global_id);
+    std::cout << "global_id" << global_id << '\n';
 
     rc = sqlite3_step(stmt);
     if (rc != SQLITE_ROW) {
@@ -408,7 +409,7 @@ void Database::update_file_link_one_field(const int cloud_id, const int global_i
     }
 }
 
-void Database::update_file_link(const int cloud_id, const int global_id, const std::string& hash, const int mod_time, const std::string& parent_id) {
+void Database::update_file_link(const int cloud_id, const int global_id, const std::string& hash, const int mod_time, const std::string& parent_id, const std::string& cloud_file_id) {
     sqlite3_busy_timeout(_db, 5000);
 
     int rc = 0;
@@ -418,7 +419,7 @@ void Database::update_file_link(const int cloud_id, const int global_id, const s
     }
     sqlite3_stmt* stmt = nullptr;
 
-    const std::string sql = "UPDATE file_links SET cloud_hash_check_sum = ?, cloud_file_modified_time = ?, cloud_parent_id = ? WHERE cloud_id = ? AND global_id = ?;";
+    const std::string sql = "UPDATE file_links SET cloud_hash_check_sum = ?, cloud_file_modified_time = ?, cloud_parent_id = ?, cloud_file_id = ? WHERE cloud_id = ? AND global_id = ?;";
     rc = sqlite3_prepare_v2(_db, sql.c_str(), -1, &stmt, nullptr);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(stmt);
@@ -429,8 +430,9 @@ void Database::update_file_link(const int cloud_id, const int global_id, const s
     sqlite3_bind_text(stmt, 1, hash.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_int64(stmt, 2, mod_time);
     sqlite3_bind_text(stmt, 3, parent_id.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_int(stmt, 4, cloud_id);
-    sqlite3_bind_int(stmt, 5, global_id);
+    sqlite3_bind_text(stmt, 4, cloud_file_id.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 5, cloud_id);
+    sqlite3_bind_int(stmt, 6, global_id);
 
     rc = sqlite3_step(stmt);
 
