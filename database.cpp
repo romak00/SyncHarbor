@@ -1,6 +1,8 @@
 #include <iostream>
 #include "database.hpp"
 
+struct WhereTag {};
+struct SetTag {};
 
 
 Database::Database(const std::string& db_file) {

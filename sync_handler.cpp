@@ -75,14 +75,14 @@ SyncHandler::SyncHandler(const std::string config_name, const std::filesystem::p
                         cloud_data["start_page_token"]));
             }
             else if (type == "OneDrive") {
-                
+
             }
         }
         std::cout << "dfsdfg" << '\n';
         sync();
     }
 
-    
+
 
 }
 
@@ -124,7 +124,7 @@ void SyncHandler::initial_upload() {
                 std::unique_ptr<CurlEasyHandle> easy_handle = cloud->create_dir_upload_handle(std::filesystem::relative(entry_path, _loc_path));
                 if (easy_handle) {
                     easy_handle->_file_info.emplace("dir", global_id, cloud_id, "root", std::filesystem::relative(entry_path, _loc_path));
-                    curl_easy_setopt(easy_handle->_curl, CURLOPT_SHARE, shared_handles[cloud_id-1]);
+                    curl_easy_setopt(easy_handle->_curl, CURLOPT_SHARE, shared_handles[cloud_id - 1]);
                     {
                         std::lock_guard<std::mutex> lock(_small_curl_mutex);
                         _small_curl_queue.emplace(std::move(easy_handle));
@@ -163,7 +163,7 @@ void SyncHandler::initial_upload() {
             std::string rel_parent_path = std::filesystem::relative(file_id_path_pair.second.parent_path(), _loc_path).string();
             std::unique_ptr<CurlEasyHandle> easy_handle = cloud->create_file_upload_handle(file_id_path_pair.second, rel_parent_path);
             easy_handle->_file_info.emplace("file", file_id_path_pair.first, cloud_id, cloud->get_path_id_mapping(rel_parent_path), file_id_path_pair.second);
-            curl_easy_setopt(easy_handle->_curl, CURLOPT_SHARE, shared_handles[cloud_id-1]);
+            curl_easy_setopt(easy_handle->_curl, CURLOPT_SHARE, shared_handles[cloud_id - 1]);
             _files_curl_queue.emplace(std::move(easy_handle));
         }
     }
@@ -254,22 +254,22 @@ void SyncHandler::async_curl_multi_small_worker() {
                     _active_handles_map.erase(easy);
                 }
                 else if (http_code == 403 || http_code == 429 || http_code == 408 || http_code >= 500 && http_code < 600) {
-                    _active_handles_map[easy]->_responce = "";
+                    _active_handles_map[easy]->_response = "";
                     _active_handles_map[easy]->retry_count++;
                     schedule_retry(std::move(_active_handles_map[easy]));
                     _active_handles_map.erase(easy);
                 }
                 else if (http_code != 200) {
                     std::cout << "http code: " << http_code << '\n';
-                    std::cout << "small responce: " << _active_handles_map[easy]->_responce << '\n';
+                    std::cout << "small response: " << _active_handles_map[easy]->_response << '\n';
                 }
                 /* else if (upload_incomplete) {                                             <-------- TODO resumable upload
                     ...
                 } */
                 else if (_active_handles_map[easy]->_file_info.has_value()) {
-                    std::cout << "small responce: " << _active_handles_map[easy]->_responce << '\n';
+                    std::cout << "small response: " << _active_handles_map[easy]->_response << '\n';
                     FileLinkRecord file_link_data(std::move(*_active_handles_map[easy]->_file_info));
-                    _clouds[file_link_data.cloud_id]->procces_responce(file_link_data, nlohmann::json::parse(_active_handles_map[easy]->_responce));
+                    _clouds[file_link_data.cloud_id]->procces_response(file_link_data, nlohmann::json::parse(_active_handles_map[easy]->_response));
                     if (file_link_data.parent_id == "root") {
                         _clouds[file_link_data.cloud_id]->insert_path_id_mapping(
                             std::filesystem::relative(_db->find_path_by_global_id(file_link_data.global_id), _loc_path),
@@ -313,7 +313,7 @@ void SyncHandler::async_curl_multi_files_worker() {
             std::cerr << "curl_multi_perform() failed, code: " << mc << '\n';
             break;
         }
-        
+
         int numfds = 0;
         mc = curl_multi_wait(multi_handle, nullptr, 0, 100, &numfds);
         if (mc != CURLM_OK) {
@@ -337,20 +337,20 @@ void SyncHandler::async_curl_multi_files_worker() {
                     std::cout << "http code: " << http_code << '\n';
                 }
                 else if (http_code == 403 || http_code == 429 || http_code == 408 || http_code >= 500 && http_code < 600) {
-                    std::cout << "file responce: " << _active_handles_map[easy]->_responce << '\n';
-                    _active_handles_map[easy]->_responce = "";
+                    std::cout << "file response: " << _active_handles_map[easy]->_response << '\n';
+                    _active_handles_map[easy]->_response = "";
                     _active_handles_map[easy]->retry_count++;
                     schedule_retry(std::move(_active_handles_map[easy]));
                 }
                 else if (http_code != 200) {
                     std::cout << "http code: " << http_code << '\n';
-                    std::cout << "files responce: " << _active_handles_map[easy]->_responce << '\n';
+                    std::cout << "files response: " << _active_handles_map[easy]->_response << '\n';
                 }
                 else if (_active_handles_map[easy]->_file_info.has_value()) {
-                    std::cout  << "file responce: " << _active_handles_map[easy]->_responce << '\n';
+                    std::cout << "file response: " << _active_handles_map[easy]->_response << '\n';
                     FileLinkRecord file_link_data(std::move(*_active_handles_map[easy]->_file_info));
-                    _clouds[file_link_data.cloud_id]->procces_responce(file_link_data, nlohmann::json::parse(_active_handles_map[easy]->_responce));
-                    
+                    _clouds[file_link_data.cloud_id]->procces_response(file_link_data, nlohmann::json::parse(_active_handles_map[easy]->_response));
+
                     {
                         std::lock_guard<std::mutex> lock(_file_link_mutex);
                         _file_link_queue.emplace(std::move(file_link_data));
@@ -612,7 +612,7 @@ void SyncHandler::check_delayed_requests(const std::string& type) {
     auto now = std::chrono::steady_clock::now();
     const int MAX_RETRY = 5;
 
-    if (type == "SMALL") {        
+    if (type == "SMALL") {
         auto it = _delayed_vec.begin();
         while (it != _delayed_vec.end()) {
             if (it->get()->timer <= now) {
@@ -633,7 +633,7 @@ void SyncHandler::check_delayed_requests(const std::string& type) {
             }
         }
     }
-    else {        
+    else {
         auto it = _delayed_vec.begin();
         while (it != _delayed_vec.end()) {
             if (it->get()->timer <= now) {
@@ -660,6 +660,11 @@ void SyncHandler::check_delayed_requests(const std::string& type) {
 void SyncHandler::schedule_retry(std::unique_ptr<CurlEasyHandle> easy_handle) {
     int BASE_DELAY = 500;
     int delay = BASE_DELAY * (1 << easy_handle->retry_count + 1);
+
+    if (easy_handle->_ifc.is_open()) {
+        easy_handle->_ifc.clear();
+        easy_handle->_ifc.seekg(0, std::ios::beg);
+    }
 
     int jitter_range = easy_handle->retry_count * BASE_DELAY;
     static std::random_device rd;

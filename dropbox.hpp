@@ -21,7 +21,7 @@ public:
     const std::string& get_home_dir_id() const override;
     void insert_path_id_mapping(const std::string& path, const std::string& id) override;
     const std::string get_path_id_mapping(const std::string& path) const override;
-    void procces_responce(FileLinkRecord& file_info, const nlohmann::json& responce) override;
+    void procces_response(FileLinkRecord& file_info, const nlohmann::json& response) override;
     ~Dropbox();
 
 private:

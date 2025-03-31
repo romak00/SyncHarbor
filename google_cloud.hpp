@@ -22,9 +22,9 @@ public:
     std::unique_ptr<CurlEasyHandle> create_file_update_handle(const std::string& id, const std::filesystem::path& path, const std::string& name = "") override;
     std::unique_ptr<CurlEasyHandle> create_file_delete_handle(const std::string& id) override;
     std::unique_ptr<CurlEasyHandle> create_name_update_handle(const std::string& id, const std::string& name) override;
-    void procces_responce(FileLinkRecord& file_info, const nlohmann::json& responce) override;
+    void procces_response(FileLinkRecord& file_info, const nlohmann::json& response) override;
     ~GoogleDrive();
-    
+
 private:
     std::string get_dir_id_by_path(const std::filesystem::path& path);
     void generateAuthURL();
