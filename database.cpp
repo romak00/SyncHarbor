@@ -1,5 +1,5 @@
 #include <iostream>
-#include "database.hpp"
+#include "database.h"
 
 struct WhereTag {};
 struct SetTag {};
@@ -27,8 +27,8 @@ Database::~Database() {
 }
 
 int Database::add_cloud(const std::string& name,
-                const std::string& type,
-                const nlohmann::json& config_data)
+    const std::string& type,
+    const nlohmann::json& config_data)
 {
     sqlite3_stmt* stmt = nullptr;
     const std::string sql = "INSERT INTO cloud_configs (name, type, config_data) "
@@ -51,7 +51,7 @@ int Database::add_cloud(const std::string& name,
         throw std::runtime_error("Failed to insert new cloud: " + name + ", error msg:" + err);
     }
     int cloud_id = sqlite3_last_insert_rowid(_db);
-    
+
     sqlite3_finalize(stmt);
     return cloud_id;
 }
@@ -74,7 +74,7 @@ nlohmann::json Database::get_cloud_config(const int cloud_id) {
         sqlite3_finalize(stmt);
         throw std::runtime_error("Cloud not found");
     }
-    
+
     const char* str = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
     auto json_str = nlohmann::json::parse(str);
 
@@ -111,7 +111,7 @@ std::vector<nlohmann::json> Database::get_clouds() {
     return std::move(clouds);
 }
 
-int Database::add_file(const std::filesystem::path& path, const std::string& type, const size_t& mod_time) {
+int Database::add_file(const std::unique_ptr<FileRecordDTO>& dto) {
     sqlite3_busy_timeout(_db, 5000);
     int rc = 0;
     rc = sqlite3_exec(_db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);
@@ -123,16 +123,18 @@ int Database::add_file(const std::filesystem::path& path, const std::string& typ
     }
     sqlite3_stmt* stmt = nullptr;
 
-    const std::string sql = "INSERT INTO files (type, path, local_modified_time) VALUES (?, ?, ?);";
+    const std::string sql = "INSERT INTO files (type, path, size, local_hash, local_modified_time) VALUES (?, ?, ?, ?, ?);";
     rc = sqlite3_prepare_v2(_db, sql.c_str(), -1, &stmt, nullptr);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(stmt);
         sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         throw std::runtime_error("Failed to prepare SQL statement add_file");
     }
-    sqlite3_bind_text(stmt, 1, type.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, path.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_int64(stmt, 3, static_cast<sqlite3_int64>(mod_time));
+    sqlite3_bind_text(stmt, 1, to_cstr(dto->type), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, dto->rel_path.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int64(stmt, 3, static_cast<sqlite3_int64>(dto->size));
+    sqlite3_bind_int64(stmt, 4, atoi((dto->cloud_hash_check_sum).c_str()));
+    sqlite3_bind_int64(stmt, 5, static_cast<sqlite3_int64>(dto->cloud_file_modified_time));
 
     rc = sqlite3_step(stmt);
     if (rc == SQLITE_BUSY) {
@@ -141,7 +143,7 @@ int Database::add_file(const std::filesystem::path& path, const std::string& typ
     else if (rc != SQLITE_DONE) {
         sqlite3_finalize(stmt);
         sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
-        throw std::runtime_error("Error adding file to files" + path.string());
+        throw std::runtime_error("Error adding file to files" + dto->rel_path.string());
     }
     int global_id = sqlite3_last_insert_rowid(_db);
     sqlite3_finalize(stmt);
@@ -151,59 +153,9 @@ int Database::add_file(const std::filesystem::path& path, const std::string& typ
     }
     else if (rc != SQLITE_OK) {
         sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
-        throw std::runtime_error("Error commiting file " + path.string());
+        throw std::runtime_error("Error commiting file " + dto->rel_path.string());
     }
     return global_id;
-}
-
-void Database::initial_add_file_links(const std::vector<FileLinkRecord>& files) {
-    sqlite3_busy_timeout(_db, 5000);
-    int rc = 0;
-    rc = sqlite3_exec(_db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);
-    if (rc == SQLITE_BUSY) {
-        std::cerr << "Ошибка: база данных занята (SQLITE_BUSY)" << std::endl;
-    }
-    else if (rc != SQLITE_OK) {
-        throw std::runtime_error("Failed to begin transaction add_file_links");
-    }
-    sqlite3_stmt* stmt = nullptr;
-    const std::string sql = "INSERT INTO file_links (global_id, cloud_id, cloud_file_id, cloud_parent_id, cloud_file_modified_time, cloud_hash_check_sum) VALUES (?, ?, ?, ?, ?, ?);";
-    rc = sqlite3_prepare_v2(_db, sql.c_str(), -1, &stmt, nullptr);
-    if (rc != SQLITE_OK) {
-        sqlite3_finalize(stmt);
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
-        throw std::runtime_error("Failed to prepare SQL statement add_file_links");
-    }
-
-    for (const auto& file : files) {
-        sqlite3_reset(stmt);
-
-        sqlite3_bind_int64(stmt, 1, file.global_id);
-        sqlite3_bind_int(stmt, 2, file.cloud_id);
-        sqlite3_bind_text(stmt, 3, file.cloud_file_id.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 4, file.parent_id.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_int64(stmt, 5, static_cast<sqlite3_int64>(file.modified_time));
-        sqlite3_bind_text(stmt, 6, file.hash_check_sum.c_str(), -1, SQLITE_STATIC);
-
-        rc = sqlite3_step(stmt);
-        if (rc == SQLITE_BUSY) {
-            std::cerr << "Ошибка: база данных занята (SQLITE_BUSY)" << std::endl;
-        }
-        else if (rc != SQLITE_DONE) {
-            sqlite3_finalize(stmt);
-            sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
-            throw std::runtime_error("Error adding file to file_links " + file.global_id);
-        }
-    }
-    sqlite3_finalize(stmt);
-    rc = sqlite3_exec(_db, "COMMIT;", nullptr, nullptr, nullptr);
-    if (rc == SQLITE_BUSY) {
-        std::cerr << "Ошибка: база данных занята (SQLITE_BUSY)" << std::endl;
-    }
-    else if (rc != SQLITE_OK) {
-        sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
-        throw std::runtime_error("Error commiting file_link " + files[0].global_id);
-    }
 }
 
 std::string Database::get_cloud_type(const int cloud_id) {
@@ -275,7 +227,7 @@ void Database::update_cloud_data(const int cloud_id, const nlohmann::json& data)
 std::filesystem::path Database::find_path_by_global_id(const int search_global_id) {
     sqlite3_stmt* stmt = nullptr;
     int rc = 0;
-    
+
     std::string sql = "SELECT path FROM files WHERE global_id = ? LIMIT 1;";
     rc = sqlite3_prepare_v2(_db, sql.c_str(), -1, &stmt, nullptr);
     if (rc != SQLITE_OK) {
@@ -292,7 +244,7 @@ std::filesystem::path Database::find_path_by_global_id(const int search_global_i
     std::string path_text = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
     std::filesystem::path path(path_text);
     sqlite3_finalize(stmt);
-    
+
     return path;
 }
 
@@ -404,7 +356,7 @@ void Database::update_file_link_one_field(const int cloud_id, const int global_i
     sqlite3_finalize(stmt);
 
     rc = sqlite3_exec(_db, "COMMIT;", nullptr, nullptr, nullptr);
-    
+
     if (rc != SQLITE_OK) {
         sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
         throw std::runtime_error("Error commiting change update_file_link_one_field");
@@ -464,7 +416,7 @@ void Database::delete_file_and_links(const int global_id) {
     sqlite3_stmt* stmt = nullptr;
 
     const std::string sql = "DELETE FROM files WHERE global_id = ?;";
-    
+
     rc = sqlite3_prepare_v2(_db, sql.c_str(), -1, &stmt, nullptr);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(stmt);
@@ -595,13 +547,7 @@ nlohmann::json Database::get_cloud_file_info(const std::string& cloud_file_id, c
     return std::move(cloud_info);
 }
 
-void Database::add_file_link(
-        const int global_id,
-        const int cloud_id,
-        const std::string& hash,
-        const std::string& parent_id,
-        const int mod_time,
-        const std::string& cloud_file_id)
+void Database::add_file_link(const std::unique_ptr<FileRecordDTO>& dto)
 {
     sqlite3_busy_timeout(_db, 5000);
     int rc = 0;
@@ -622,12 +568,12 @@ void Database::add_file_link(
     }
 
 
-    sqlite3_bind_int64(stmt, 1, global_id);
-    sqlite3_bind_int(stmt, 2, cloud_id);
-    sqlite3_bind_text(stmt, 3, cloud_file_id.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 4, parent_id.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_int64(stmt, 5, mod_time);
-    sqlite3_bind_text(stmt, 6, hash.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int64(stmt, 1, dto->global_id);
+    sqlite3_bind_int(stmt, 2, dto->cloud_id);
+    sqlite3_bind_text(stmt, 3, dto->cloud_file_id.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 4, dto->cloud_parent_id.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int64(stmt, 5, dto->cloud_file_modified_time);
+    sqlite3_bind_text(stmt, 6, dto->cloud_hash_check_sum.c_str(), -1, SQLITE_STATIC);
 
     rc = sqlite3_step(stmt);
     if (rc == SQLITE_BUSY) {
@@ -636,7 +582,7 @@ void Database::add_file_link(
     else if (rc != SQLITE_DONE) {
         sqlite3_finalize(stmt);
         sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
-        throw std::runtime_error("Error adding file to file_links " + global_id);
+        throw std::runtime_error("Error adding file to file_links " + dto->global_id);
     }
 
     sqlite3_finalize(stmt);
@@ -646,7 +592,7 @@ void Database::add_file_link(
     }
     else if (rc != SQLITE_OK) {
         sqlite3_exec(_db, "ROLLBACK;", nullptr, nullptr, nullptr);
-        throw std::runtime_error("Error commiting file_link " + global_id);
+        throw std::runtime_error("Error commiting file_link " + dto->global_id);
     }
 }
 
@@ -684,6 +630,8 @@ void Database::create_tables() {
             global_id           INTEGER PRIMARY KEY AUTOINCREMENT,
             type                TEXT NOT NULL,
             path                TEXT NOT NULL,
+            size                INTEGER,
+            local_hash          INTEGER,
             local_modified_time INTEGER
         );
         CREATE TABLE IF NOT EXISTS file_links (
