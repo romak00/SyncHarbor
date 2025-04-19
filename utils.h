@@ -64,17 +64,37 @@ enum class UpdateType {
 
 class FileRecordDTO {
 public:
+    FileRecordDTO(
+        const EntryType t,
+        const std::filesystem::path& rp,
+        const size_t s,
+        const std::time_t cfmt,
+        const int hash
+    ) :
+        type(t),
+        rel_path(rp),
+        size(s),
+        cloud_file_modified_time(cfmt),
+        cloud_hash_check_sum(std::to_string(hash)),
+        cloud_id(0)
+    {
+    }
+
     FileRecordDTO(const EntryType t,
         const std::filesystem::path& rp,
         const size_t s,
-        const std::time_t cfmt)
+        const std::time_t cfmt,
+        const std::string& hash,
+        const int cid)
         : type(t),
         rel_path(rp),
         size(s),
         cloud_file_modified_time(cfmt),
-        cloud_id(0)
+        cloud_hash_check_sum(hash),
+        cloud_id(cid)
     {
     }
+
 
     FileRecordDTO() = default;
     ~FileRecordDTO() = default;
@@ -294,6 +314,25 @@ public:
         _timer = std::chrono::steady_clock::now() + std::chrono::milliseconds(delay);
     }
 
+    void setFileStream(const std::string& file_path, std::ios::openmode mode) {
+        _iofd = std::fstream(file_path, mode | std::ios::binary);
+        if (_iofd && _iofd.is_open()) {
+            switch (mode) {
+            case std::ios::in:
+                curl_easy_setopt(_curl, CURLOPT_READDATA, &_iofd);
+                curl_easy_setopt(_curl, CURLOPT_READFUNCTION, RequestHandle::readData);
+                break;
+            case std::ios::out:
+                curl_easy_setopt(_curl, CURLOPT_WRITEDATA, &_iofd);
+                curl_easy_setopt(_curl, CURLOPT_WRITEFUNCTION, RequestHandle::writeData);
+                break;
+            }
+        }
+        else {
+            throw std::runtime_error("Error opening file: " + file_path);
+        }
+    }
+
     void addHeaders(const std::string& header) {
         _headers = curl_slist_append(_headers, header.c_str());
     }
@@ -308,8 +347,8 @@ public:
         curl_easy_setopt(_curl, CURLOPT_BUFFERSIZE, 131072L);
         curl_easy_setopt(_curl, CURLOPT_MAX_SEND_SPEED_LARGE, 0);
         curl_easy_setopt(_curl, CURLOPT_MAX_RECV_SPEED_LARGE, 0);
-        curl_easy_setopt(_curl, CURLOPT_WRITEFUNCTION, RequestHandle::writeCallback);
         curl_easy_setopt(_curl, CURLOPT_WRITEDATA, &_response);
+        curl_easy_setopt(_curl, CURLOPT_WRITEFUNCTION, RequestHandle::writeCallback);
         if (_headers) {
             curl_easy_setopt(_curl, CURLOPT_HTTPHEADER, _headers);
         }
@@ -320,6 +359,19 @@ public:
         output->append((char*)contents, total_size);
         return total_size;
     }
+
+    static size_t readData(void* ptr, size_t size, size_t nmemb, void* stream) {
+        std::ifstream* file = static_cast<std::ifstream*>(stream);
+        file->read(static_cast<char*>(ptr), size * nmemb);
+        return file->gcount();
+    }
+
+    static size_t writeData(void* ptr, size_t size, size_t nmemb, void* stream) {
+        std::ofstream* file = static_cast<std::ofstream*>(stream);
+        file->write(static_cast<char*>(ptr), size * nmemb);
+        return size * nmemb;
+    }
+
 
     CURL* _curl;
     curl_mime* _mime;
@@ -380,7 +432,12 @@ public:
         _cv.notify_all();
     }
 
-    bool pop(T& out, std::function<bool()> externalCondition = []() { return false; }) {
+    bool pop(T& out) {
+        return pop(out, []() { return false; });
+    }
+
+    template<typename Predicate>
+    bool pop(T& out, Predicate&& externalCondition) {
         std::unique_lock<std::mutex> lock(_mutex);
         _cv.wait(lock, [&]() {
             return !_queue.empty() || externalCondition();
@@ -405,5 +462,5 @@ public:
 private:
     std::queue<T> _queue;
     mutable std::mutex _mutex;
-    std::condition_variable _cv;
+    mutable std::condition_variable _cv;
 };
