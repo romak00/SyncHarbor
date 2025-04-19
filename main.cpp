@@ -1,9 +1,9 @@
-#include "sync_handler.hpp"
+#include "sync_handler.h"
 
 
 
 
-int main() {
+int main(int argc, char* argv[]) {
     auto start = std::chrono::high_resolution_clock::now();
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -13,9 +13,7 @@ int main() {
 
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-
-    std::cout << "Время выполнения: " << (double)duration/1000 << " с" << std::endl;
-
+    std::cout << "Время выполнения: " << (double)duration / 1000 << " с" << std::endl;
 
     return 0;
 }

@@ -1,4 +1,6 @@
 #include "CallbackDispatcher.h"
+#include "command.h"
+
 
 CallbackDispatcher& CallbackDispatcher::get() {
     static CallbackDispatcher instance;
@@ -9,7 +11,7 @@ CallbackDispatcher::CallbackDispatcher() {
     _worker = std::make_unique<std::thread>(&CallbackDispatcher::worker, this);
 }
 
-CallbackDispatcher::~CallbackDispatcher() {
+void CallbackDispatcher::finish() {
     _should_stop = true;
     _queue.notify();
     if (_worker && _worker->joinable()) {
@@ -32,7 +34,7 @@ void CallbackDispatcher::submit(std::unique_ptr<ICommand> command) {
 void CallbackDispatcher::worker() {
     while (!_should_stop || !_queue.empty()) {
         std::unique_ptr<ICommand> command;
-        while (_queue.pop(command)) {
+        while (_queue.pop(command, [&]() { return _should_stop.load(); })) {
             int cloud_id = command->getId();
             command->completionCallback(*_db, *_clouds[cloud_id]);
         }

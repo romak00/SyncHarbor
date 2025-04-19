@@ -1,8 +1,7 @@
 #include "Networking.h"
+#include "command.h"
 
-HttpClient::HttpClient(int max_concurrent_big_requests = 120, int max_concurrent_small_requests = 7)
-    : _MAX_CONCURRENT_LARGE(max_concurrent_big_requests),
-    _MAX_CONCURRENT_SMALL(max_concurrent_small_requests)
+HttpClient::HttpClient()
 {
     _MAX_CONCURRENT = _MAX_CONCURRENT_SMALL;
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -12,17 +11,18 @@ HttpClient::HttpClient(int max_concurrent_big_requests = 120, int max_concurrent
     _large_worker = std::make_unique<std::thread>(&HttpClient::largeRequestsWorker, this);
 }
 
-HttpClient::~HttpClient() {
+void HttpClient::shutdown() {
     _should_stop = true;
     _large_queue.notify();
 
-    if (_large_worker&& _large_worker->joinable()) {
+    if (_large_worker && _large_worker->joinable()) {
         _large_worker->join();
     }
 
     curl_multi_cleanup(_large_multi_handle);
-
     curl_global_cleanup();
+
+    CallbackDispatcher::get().finish();
 }
 
 void HttpClient::submit(std::unique_ptr<ICommand> command) {
@@ -51,19 +51,22 @@ void HttpClient::setClouds(const std::unordered_map<int, std::shared_ptr<BaseSto
 
 void HttpClient::largeRequestsWorker() {
     int still_running = 0;
+
     while (!_should_stop || !_large_queue.empty() || still_running > 0 || !_delayed_requests.empty()) {
         {
             std::unique_ptr<ICommand> request_command;
-            while (_large_active_count < _MAX_CONCURRENT && _large_queue.pop(request_command)) {
+            while (_large_active_count < _MAX_CONCURRENT &&
+                _large_queue.pop(request_command, [&]() { return _should_stop.load(); }))
+            {
                 CURL* easy = request_command->getHandle()._curl;
                 curl_multi_add_handle(_large_multi_handle, easy);
                 _active_handles.insert({ easy, std::move(request_command) });
                 _large_active_count++;
             }
         }
+
         CURLMcode mc = curl_multi_perform(_large_multi_handle, &still_running);
         if (mc != CURLM_OK) {
-            std::cerr << "curl_multi_perform() failed, code: " << mc << '\n';
             break;
         }
 
@@ -78,7 +81,6 @@ void HttpClient::largeRequestsWorker() {
         while ((msg = curl_multi_info_read(_large_multi_handle, &msgs_left))) {
             if (msg->msg == CURLMSG_DONE) {
                 CURL* easy = msg->easy_handle;
-                
                 curl_multi_remove_handle(_large_multi_handle, easy);
                 _large_active_count--;
 
@@ -86,9 +88,6 @@ void HttpClient::largeRequestsWorker() {
                 curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &http_code);
 
                 if (msg->data.result != CURLE_OK) {
-                    std::cerr << "Request failed: "
-                        << curl_easy_strerror(msg->data.result) << "\n";
-                    std::cout << "http code: " << http_code << '\n';
                     _active_handles.erase(easy);
                 }
                 else if (http_code == 403 || http_code == 429 || http_code == 408 || http_code >= 500 && http_code < 600) {

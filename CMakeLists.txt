@@ -18,11 +18,13 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(nlohmann_json)
 
 add_executable(${PROJECT_NAME}
-    main.cpp
+    test.cpp
     database.cpp
-    google_cloud.cpp
-    sync_handler.cpp
+    google.cpp
     dropbox.cpp
+    CallbackDispatcher.cpp
+    Networking.cpp
+    LocalStorage.cpp
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE

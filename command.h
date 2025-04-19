@@ -14,7 +14,7 @@ public:
     virtual void setDTO(std::unique_ptr<FileRecordDTO> dto) = 0;
     virtual void setDTO(std::unique_ptr<FileModifiedDTO> dto) = 0;
     virtual void setDTO(std::unique_ptr<FileDeletedDTO> dto) = 0;
-    virtual RequestHandle& getHandle() const = 0;
+    virtual RequestHandle& getHandle() = 0;
     virtual const int getId() const = 0;
 };
 
@@ -54,9 +54,12 @@ public:
     LocalUploadCommand(const int cloud_id) {
         _cloud_id = cloud_id;
     }
-    RequestHandle& getHandle() const override {}
+    RequestHandle& getHandle() override {
+        static RequestHandle dummy;
+        return dummy;
+    }
     void execute(const BaseStorage& cloud) override {
-        
+
     }
     void completionCallback(Database& db, const BaseStorage& cloud) override {
         int global_id = db.add_file(_dto);
@@ -74,6 +77,14 @@ public:
         _dto->cloud_id = _cloud_id;
     }
 
+    void setDTO(std::unique_ptr<FileModifiedDTO> dto) override {
+        throw std::logic_error("Not implemented for LocalUploadCommand");
+    }
+
+    void setDTO(std::unique_ptr<FileDeletedDTO> dto) override {
+        throw std::logic_error("Not implemented for LocalUploadCommand");
+    }
+
 private:
     std::unique_ptr<FileRecordDTO> _dto;
 };
@@ -83,7 +94,7 @@ public:
     CloudUploadCommand(const int cloud_id) {
         _cloud_id = cloud_id;
     }
-    
+
     void execute(const BaseStorage& cloud) override {
         _handle = std::make_unique<RequestHandle>();
         cloud.setupUploadHandle(_handle, _dto);
@@ -95,12 +106,20 @@ public:
         continueChain();
     }
 
-    void setDTO(std::unique_ptr<FileRecordDTO> dto) {
+    void setDTO(std::unique_ptr<FileRecordDTO> dto) override {
         _dto = std::move(dto);
         _dto->cloud_id = _cloud_id;
     }
 
-    RequestHandle& getHandle() const override {
+    void setDTO(std::unique_ptr<FileModifiedDTO> dto) override {
+        throw std::logic_error("Not implemented for CloudUploadCommand");
+    }
+
+    void setDTO(std::unique_ptr<FileDeletedDTO> dto) override {
+        throw std::logic_error("Not implemented for CloudUploadCommand");
+    }
+
+    RequestHandle& getHandle() override {
         return *_handle;
     }
 
@@ -114,14 +133,17 @@ public:
     CloudUpdateCommand() {
 
     }
-    
-    void execute(const BaseStorage& cloud) override{
-        _handle = std::make_unique<RequestHandle>();
-        cloud.setupUpdateHandle(_handle, _dto);
+
+    void execute(const BaseStorage& cloud) override {
+
     }
 
     void completionCallback(Database& db, const BaseStorage& cloud) override {
-        cloud.proccesUpdate(_dto, _handle->_response);
+
+    }
+
+    RequestHandle& getHandle() override {
+        return *_handle;
     }
 
 private:
@@ -131,17 +153,19 @@ private:
 
 class CloudDownloadCommand : public CloudCommand {
 public:
-    CloudDownloadCommand(std::unique_ptr<FileRecordDTO> dto, std::shared_ptr<BaseStorage> cloud) {
-        _dto = std::move(dto);
-        _handle = std::make_unique<RequestHandle>();
-        cloud->setupDownloadHandle(_handle, _dto);
+    CloudDownloadCommand() {
+
     }
 
     void execute(const BaseStorage& cloud) override {
     }
 
     void completionCallback(Database& db, const BaseStorage& cloud) override {
-        cloud.proccesUpload(_dto, _handle->_response);
+
+    }
+
+    RequestHandle& getHandle() override {
+        return *_handle;
     }
 
 private:
@@ -149,6 +173,3 @@ private:
     std::unique_ptr<FileRecordDTO> _dto;
 };
 
-class ChangeCommand : public ICommand {
-    
-};

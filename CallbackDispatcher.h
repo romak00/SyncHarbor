@@ -1,8 +1,9 @@
 #pragma once
 
 #include "BaseStorage.h"
-#include "command.h"
 #include "utils.h"
+
+class ICommand;
 
 class CallbackDispatcher {
 public:
@@ -10,10 +11,13 @@ public:
     void submit(std::unique_ptr<ICommand> command);
     void setDB(const std::string& db_file_name);
     void setClouds(const std::unordered_map<int, std::shared_ptr<BaseStorage>>& clouds);
-
 private:
+    friend class HttpClient;
+    
     CallbackDispatcher();
-    ~CallbackDispatcher();
+    ~CallbackDispatcher() = default;
+
+    void finish();
 
     CallbackDispatcher(const CallbackDispatcher&) = delete;
     CallbackDispatcher& operator=(const CallbackDispatcher&) = delete;

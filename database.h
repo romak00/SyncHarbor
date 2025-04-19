@@ -1,11 +1,8 @@
 #pragma once
 
 #include <sqlite3.h>
-#include <string>
 #include <vector>
 #include <chrono>
-#include <filesystem>
-#include <nlohmann/json.hpp>
 #include "utils.h"
 
 class ICommand;
