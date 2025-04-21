@@ -29,7 +29,8 @@ FetchContent_MakeAvailable(efsw)
 FetchContent_Declare(
     xxhash
     GIT_REPOSITORY https://github.com/Cyan4973/xxHash.git
-    GIT_TAG        v0.8.2 
+    GIT_TAG        v0.8.3
+    SOURCE_SUBDIR  cmake_unofficial
 )
 
 FetchContent_MakeAvailable(xxhash)
@@ -51,4 +52,5 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     nlohmann_json::nlohmann_json
     Threads::Threads
     efsw
+    xxhash
 )
