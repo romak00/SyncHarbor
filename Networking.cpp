@@ -1,5 +1,6 @@
 #include "Networking.h"
 #include "command.h"
+#include "logger.h"
 
 HttpClient::HttpClient()
 {
@@ -19,6 +20,8 @@ void HttpClient::shutdown() {
         _large_worker->join();
     }
 
+    LOG_INFO("HttpClient", "Finished");
+
     curl_multi_cleanup(_large_multi_handle);
     curl_global_cleanup();
 
@@ -27,6 +30,12 @@ void HttpClient::shutdown() {
 
 void HttpClient::submit(std::unique_ptr<ICommand> command) {
     int cloud_id = command->getId();
+    LOG_DEBUG(
+        "HttpClient",
+        "Request submited for file: %s and cloud: %s",
+        command->getTargetFile(),
+        CloudResolver::getName(command->getId())
+    );
     command->execute(*_clouds[cloud_id]);
     _large_queue.push(std::move(command));
 }
@@ -50,6 +59,8 @@ void HttpClient::setClouds(const std::unordered_map<int, std::shared_ptr<BaseSto
 }
 
 void HttpClient::largeRequestsWorker() {
+    ThreadNamer::setThreadName("HttpClient Worker");
+    LOG_INFO("HttpClient", "Started");
     int still_running = 0;
 
     while (!_should_stop || !_large_queue.empty() || still_running > 0 || !_delayed_requests.empty()) {
@@ -59,6 +70,12 @@ void HttpClient::largeRequestsWorker() {
                 _large_queue.pop(request_command, [&]() { return _should_stop.load(); }))
             {
                 CURL* easy = request_command->getHandle()._curl;
+                LOG_DEBUG(
+                    "HttpClient",
+                    "Adding CURL handle for file: %s and cloudL: %s",
+                    request_command->getTargetFile(),
+                    CloudResolver::getName(request_command->getId())
+                );
                 curl_multi_add_handle(_large_multi_handle, easy);
                 _active_handles.insert({ easy, std::move(request_command) });
                 _large_active_count++;
@@ -67,13 +84,14 @@ void HttpClient::largeRequestsWorker() {
 
         CURLMcode mc = curl_multi_perform(_large_multi_handle, &still_running);
         if (mc != CURLM_OK) {
+            LOG_ERROR("HttpClient", "curl_muli_perform() failed, code: %i", mc);
             break;
         }
 
         int numfds = 0;
         mc = curl_multi_wait(_large_multi_handle, nullptr, 0, 1000, &numfds);
         if (mc != CURLM_OK) {
-            std::cerr << "curl_multi_wait() failed, code: " << mc << '\n';
+            LOG_ERROR("HttpClient", "curl_muli_wait() failed, code: %i", mc);
             break;
         }
         CURLMsg* msg;
@@ -84,25 +102,44 @@ void HttpClient::largeRequestsWorker() {
                 curl_multi_remove_handle(_large_multi_handle, easy);
                 _large_active_count--;
 
+                if (_active_handles[easy]->getTargetFile() != "CONFIG") {
+                    LOG_INFO("HttpClient",
+                        "Request completed for file: %s and cloud: %s",
+                        _active_handles[easy]->getTargetFile(),
+                        CloudResolver::getName(_active_handles[easy]->getId())
+                    );
+                }
+                else {
+                    LOG_INFO("HttpClient",
+                        "Configuration request completed for: %s",
+                        CloudResolver::getName(_active_handles[easy]->getId())
+                    );
+                }
+
                 long http_code = 0;
                 curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &http_code);
 
                 if (msg->data.result != CURLE_OK) {
+                    LOG_ERROR("HttpClient", "curl failed with code: %i and msg: %s", mc, curl_easy_strerror(msg->data.result));
                     _active_handles.erase(easy);
                 }
                 else if (http_code == 403 || http_code == 429 || http_code == 408 || http_code >= 500 && http_code < 600) {
-                    std::cout << "file response: " << _active_handles[easy]->getHandle()._response << '\n';
+                    LOG_WARNING("HttpClient", "HTTP code %i, scheduling retry", http_code);
+
                     _active_handles[easy]->getHandle().scheduleRetry();
                     _delayed_requests.emplace_back(std::move(_active_handles[easy]));
                     _active_handles.erase(easy);
                 }
                 else if (http_code != 200) {
-                    std::cout << "http code: " << http_code << '\n';
-                    std::cout << "file response: " << _active_handles[easy]->getHandle()._response << '\n';
+                    LOG_ERROR("HttpClient", "Unexpected HTTP code %i with response: %s", http_code, _active_handles[easy]->getHandle()._response);
                     _active_handles.erase(easy);
                 }
                 else {
-                    std::cout << "file response: " << _active_handles[easy]->getHandle()._response << '\n';
+                    LOG_DEBUG(
+                        "HttpClient",
+                        "Request succeeded with response: %s",
+                        _active_handles[easy]->getHandle()._response
+                    );
                     CallbackDispatcher::get().submit(std::move(_active_handles[easy]));
                     _active_handles.erase(easy);
                 }

@@ -3,6 +3,7 @@
 #include "utils.h"
 #include "Networking.h"
 #include "CallbackDispatcher.h"
+#include "logger.h"
 
 
 class ICommand {
@@ -15,6 +16,7 @@ public:
     virtual void setDTO(std::unique_ptr<FileModifiedDTO> dto) = 0;
     virtual void setDTO(std::unique_ptr<FileDeletedDTO> dto) = 0;
     virtual RequestHandle& getHandle() = 0;
+    virtual std::string getTargetFile() const = 0;
     virtual const int getId() const = 0;
 };
 
@@ -70,6 +72,7 @@ public:
         for (auto& next_command : _next_commands) {
             next_command->setDTO(std::make_unique<FileRecordDTO>(*_dto));
         }
+        LOG_INFO("LOCAL UPLOAD", this->getTargetFile(), "completed");
         continueChain();
     }
     void setDTO(std::unique_ptr<FileRecordDTO> dto) override {
@@ -85,6 +88,10 @@ public:
         throw std::logic_error("Not implemented for LocalUploadCommand");
     }
 
+    std::string getTargetFile() const override {
+        return _dto->rel_path.string();
+    }
+
 private:
     std::unique_ptr<FileRecordDTO> _dto;
 };
@@ -98,11 +105,14 @@ public:
     void execute(const BaseStorage& cloud) override {
         _handle = std::make_unique<RequestHandle>();
         cloud.setupUploadHandle(_handle, _dto);
+
+        LOG_INFO("CLOUD UPLOAD", "Started for entry: %s on: %s", this->getTargetFile(), CloudResolver::getName(_cloud_id));
     }
 
     void completionCallback(Database& db, const BaseStorage& cloud) override {
         cloud.proccesUpload(_dto, _handle->_response);
         db.add_file_link(_dto);
+        LOG_INFO("CLOUD UPLOAD", "Completed for entry: %s on: %s", this->getTargetFile(), CloudResolver::getName(_cloud_id));
         continueChain();
     }
 
@@ -121,6 +131,10 @@ public:
 
     RequestHandle& getHandle() override {
         return *_handle;
+    }
+
+    std::string getTargetFile() const override {
+        return _dto->rel_path.string();
     }
 
 private:
@@ -146,6 +160,10 @@ public:
         return *_handle;
     }
 
+    std::string getTargetFile() const override {
+        return _dto->rel_path.filename().string();
+    }
+
 private:
     std::unique_ptr<RequestHandle> _handle;
     std::unique_ptr<FileModifiedDTO> _dto;
@@ -166,6 +184,10 @@ public:
 
     RequestHandle& getHandle() override {
         return *_handle;
+    }
+
+    std::string getTargetFile() const override {
+        return _dto->rel_path.filename().string();
     }
 
 private:

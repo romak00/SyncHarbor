@@ -5,6 +5,9 @@
 std::map<std::thread::id, std::string> ThreadNamer::_thread_names;
 std::mutex ThreadNamer::_mutex;
 
+std::unordered_map<int, std::string> CloudResolver::_cloudNames;
+std::mutex CloudResolver::_mutex;
+
 void ThreadNamer::setThreadName(const std::string& name) {
     std::lock_guard<std::mutex> lock(_mutex);
     _thread_names[std::this_thread::get_id()] = name;
@@ -31,6 +34,12 @@ Logger::~Logger() {
     }
 }
 
+void Logger::log(LogLevel level, const std::string& component, const std::string& message) {
+    if (level < _global_level) return;
+    std::string formatted = formatMessage(level, component, message);
+    output(formatted, level);
+}
+
 Logger& Logger::get() {
     static Logger instance;
     return instance;
@@ -39,7 +48,7 @@ Logger& Logger::get() {
 void Logger::addLogFile(const std::string& name, const std::string& filename) {
     std::lock_guard<std::mutex> lock(_mutex);
     LogDestination dest;
-    dest.stream.open(filename, std::ios::out | std::ios::app);
+    dest.stream.open(filename, std::ios::out);
     dest.level = _global_level;
     _logs[name] = std::move(dest);
 }
@@ -64,11 +73,23 @@ void Logger::setLogLevelFor(const std::string& logName, LogLevel level) {
 std::string Logger::formatMessage(LogLevel level, const std::string& component, const std::string& message) {
     std::stringstream ss;
     ss << getTimestamp()
-        << " [" << std::setw(7) << levelToString(level) << "]"
-        << " [Thread:" << std::setw(15) << std::left << ThreadNamer::getThreadName() << "]"
-        << " [" << std::setw(20) << std::left << component << "] "
+        << " [" << levelToString(level) << "]"
+        << " [Thread:"<< std::left << ThreadNamer::getThreadName() << "]"
+        << " [" << std::left << component << "] "
         << message;
     return ss.str();
+}
+
+void Logger::output(const std::string& formatted, LogLevel level) {
+    std::lock_guard<std::mutex> lock(_mutex);
+    for (auto& [name, dest] : _logs) {
+        if (level >= dest.level) {
+            dest.stream << formatted << std::endl;
+        }
+    }
+    if (_console_enabled) {
+        std::cout << formatted << std::endl;
+    }
 }
 
 std::string Logger::levelToString(LogLevel level) {
@@ -91,60 +112,4 @@ std::string Logger::getTimestamp() {
     ss << std::put_time(std::localtime(&time), "%Y-%m-%d %H:%M:%S")
         << '.' << std::setfill('0') << std::setw(3) << ms.count();
     return ss.str();
-}
-
-template<typename... Args>
-void Logger::log(LogLevel level, const std::string& component, const std::string& format, Args... args) {
-    if (level < _global_level) return;
-
-    size_t size = snprintf(nullptr, 0, format.c_str(), args...) + 1;
-    std::unique_ptr<char[]> buf(new char[size]);
-    snprintf(buf.get(), size, format.c_str(), args...);
-    std::string message(buf.get(), buf.get() + size - 1);
-
-    std::string formatted = formatMessage(level, component, message);
-
-    std::lock_guard<std::mutex> lock(_mutex);
-
-    for (auto& [name, dest] : _logs) {
-        if (level >= dest.level) {
-            dest.stream << formatted << std::endl;
-        }
-    }
-
-    if (_console_enabled) {
-        std::cout << formatted << std::endl;
-    }
-}
-
-void OperationContext::updateStatus(const std::string& status, const std::string& details = "") {
-    Logger::get().log(LogLevel::INFO, _component,
-        "[%s][%s] %s: %s",
-        _operationType.c_str(),
-        _fileInfo.c_str(),
-        status.c_str(),
-        details.c_str());
-}
-
-OperationContext::~OperationContext() {
-    Logger::get().log(LogLevel::INFO, _component,
-        "[%s][%s] Operation COMPLETED",
-        _operationType.c_str(),
-        _fileInfo.c_str());
-}
-
-OperationContext::OperationContext(
-    const std::string& operationType,
-    const std::string& component,
-    const std::string& fileInfo = ""
-)
-    :
-    _operationType(operationType),
-    _component(component),
-    _fileInfo(fileInfo)
-{
-    Logger::get().log(LogLevel::INFO, _component,
-        "[%s][%s] Operation STARTED",
-        _operationType.c_str(),
-        _fileInfo.c_str());
 }
