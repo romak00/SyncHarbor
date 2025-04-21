@@ -423,8 +423,11 @@ private:
 
 
 template<typename T>
-class RequestQueue {
+class ThreadSafeQueue {
 public:
+    ThreadSafeQueue() = default;
+    ~ThreadSafeQueue() = default;
+
     template<typename U>
     void push(U&& request) {
         std::lock_guard<std::mutex> lock(_mutex);

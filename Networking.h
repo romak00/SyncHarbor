@@ -20,7 +20,7 @@ public:
     void submit(std::unique_ptr<ICommand> command);
     void setMod(const std::string& mod);
     void setClouds(const std::unordered_map<int, std::shared_ptr<BaseStorage>>& clouds);
-    
+
     void shutdown();
 
 private:
@@ -44,7 +44,7 @@ private:
 
     std::unordered_map<int, std::shared_ptr<BaseStorage>> _clouds;
 
-    RequestQueue<std::unique_ptr<ICommand>> _large_queue;
+    ThreadSafeQueue<std::unique_ptr<ICommand>> _large_queue;
 
     std::unique_ptr<std::thread> _large_worker;
 

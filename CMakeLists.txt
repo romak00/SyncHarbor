@@ -9,6 +9,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(CURL REQUIRED)
 find_package(SQLite3 REQUIRED)
+find_package(Threads REQUIRED)
 
 include(FetchContent)
 FetchContent_Declare(
@@ -16,6 +17,22 @@ FetchContent_Declare(
     URL https://github.com/nlohmann/json/releases/download/v3.11.2/json.tar.xz
 )
 FetchContent_MakeAvailable(nlohmann_json)
+
+FetchContent_Declare(
+    efsw
+    GIT_REPOSITORY https://github.com/SpartanJ/efsw.git
+    GIT_TAG        master
+)
+
+FetchContent_MakeAvailable(efsw)
+
+FetchContent_Declare(
+    xxhash
+    GIT_REPOSITORY https://github.com/Cyan4973/xxHash.git
+    GIT_TAG        v0.8.2 
+)
+
+FetchContent_MakeAvailable(xxhash)
 
 add_executable(${PROJECT_NAME}
     test.cpp
@@ -25,13 +42,13 @@ add_executable(${PROJECT_NAME}
     CallbackDispatcher.cpp
     Networking.cpp
     LocalStorage.cpp
+    logger.cpp
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     CURL::libcurl
     SQLite::SQLite3
     nlohmann_json::nlohmann_json
+    Threads::Threads
+    efsw
 )
-
-find_package(Threads REQUIRED)
-target_link_libraries(${PROJECT_NAME} PRIVATE Threads::Threads)

@@ -13,7 +13,7 @@ public:
     void setClouds(const std::unordered_map<int, std::shared_ptr<BaseStorage>>& clouds);
 private:
     friend class HttpClient;
-    
+
     CallbackDispatcher();
     ~CallbackDispatcher() = default;
 
@@ -30,7 +30,7 @@ private:
     std::unordered_map<int, std::shared_ptr<BaseStorage>> _clouds;
 
     std::atomic<bool> _should_stop{ false };
-    RequestQueue<std::unique_ptr<ICommand>> _queue;
+    ThreadSafeQueue<std::unique_ptr<ICommand>> _queue;
 
     std::unique_ptr<std::thread> _worker;
 
