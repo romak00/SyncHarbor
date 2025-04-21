@@ -1,4 +1,4 @@
-#include "sync_handler.hpp"
+#include "sync_handler.h"
 
 inline static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* output) {
     size_t totalSize = size * nmemb;
@@ -268,7 +268,7 @@ void SyncHandler::async_curl_multi_small_worker() {
                 } */
                 else if (_active_handles_map[easy]->_file_info.has_value()) {
                     std::cout << "small response: " << _active_handles_map[easy]->_response << '\n';
-                    FileLinkRecord file_link_data(std::move(*_active_handles_map[easy]->_file_info));
+                    FileRecordDTO file_link_data(std::move(*_active_handles_map[easy]->_file_info));
                     _clouds[file_link_data.cloud_id]->procces_response(file_link_data, nlohmann::json::parse(_active_handles_map[easy]->_response));
                     if (file_link_data.parent_id == "root") {
                         _clouds[file_link_data.cloud_id]->insert_path_id_mapping(
@@ -348,7 +348,7 @@ void SyncHandler::async_curl_multi_files_worker() {
                 }
                 else if (_active_handles_map[easy]->_file_info.has_value()) {
                     std::cout << "file response: " << _active_handles_map[easy]->_response << '\n';
-                    FileLinkRecord file_link_data(std::move(*_active_handles_map[easy]->_file_info));
+                    FileRecordDTO file_link_data(std::move(*_active_handles_map[easy]->_file_info));
                     _clouds[file_link_data.cloud_id]->procces_response(file_link_data, nlohmann::json::parse(_active_handles_map[easy]->_response));
 
                     {
@@ -375,7 +375,7 @@ void SyncHandler::async_curl_multi_files_worker() {
 void SyncHandler::async_db_add_file_link() {
     std::unique_ptr<Database> db_conn = std::make_unique<Database>(_db_file_name);
     int batch_size = 25;
-    std::vector<FileLinkRecord> batch{};
+    std::vector<FileRecordDTO> batch{};
     while (true) {
         {
             std::unique_lock<std::mutex> lock(_file_link_mutex);
@@ -385,7 +385,7 @@ void SyncHandler::async_db_add_file_link() {
                 batch.emplace_back(std::move(_file_link_queue.front()));
                 _file_link_queue.pop();
                 if (batch.back().info == "change") {
-                    FileLinkRecord curr(std::move(batch.back()));
+                    FileRecordDTO curr(std::move(batch.back()));
                     std::cout << curr.cloud_id << curr.global_id << curr.hash_check_sum << curr.modified_time << curr.parent_id << '\n';
                     db_conn->update_file_link(curr.cloud_id, curr.global_id, curr.hash_check_sum, curr.modified_time, curr.parent_id, curr.cloud_file_id);
                     batch.pop_back();

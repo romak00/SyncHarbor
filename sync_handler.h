@@ -1,10 +1,10 @@
 #pragma once
 
 #include <filesystem>
-#include "google_cloud.hpp"
-#include "dropbox.hpp"
+#include "google.h"
+#include "dropbox.h"
 #include <curl/curl.h>
-#include "database.hpp"
+#include "database.h"
 #include <sstream>
 #include <fstream>
 #include <unordered_map>
@@ -29,7 +29,7 @@ private:
     void check_delayed_requests(const std::string& type);
     void schedule_retry(std::unique_ptr<CurlEasyHandle> easy_handle);
 
-    std::unordered_map<int, std::unique_ptr<BaseCloud>> _clouds;
+    std::unordered_map<int, std::unique_ptr<BaseStorage>> _clouds;
     const std::string _db_file_name;
     const std::filesystem::path _loc_path;
     std::unique_ptr<Database> _db;
@@ -38,9 +38,7 @@ private:
     std::vector<std::unique_ptr<CurlEasyHandle>> _delayed_vec;
     std::mutex _delayed_mutex;
 
-    std::vector<std::pair<int, std::string>> _dirs_to_map;
-
-    std::queue<FileLinkRecord> _file_link_queue;
+    std::queue<FileRecordDTO> _file_link_queue;
     std::mutex _file_link_mutex;
     std::condition_variable _file_link_CV;
     std::atomic<bool> _file_link_finished;
@@ -56,7 +54,7 @@ private:
     std::mutex _files_curl_mutex;
     std::condition_variable _files_curl_CV;
     std::atomic<bool> _files_curl_finished;
-    
+
     const int _SMALL_MAX_ACTIVE = 7;
     int _small_active_count = 0;
     std::queue<std::unique_ptr<CurlEasyHandle>> _small_curl_queue;
