@@ -12,28 +12,34 @@ find_package(SQLite3 REQUIRED)
 find_package(Threads REQUIRED)
 
 include(FetchContent)
+
 FetchContent_Declare(
     nlohmann_json
     URL https://github.com/nlohmann/json/releases/download/v3.11.2/json.tar.xz
 )
-FetchContent_MakeAvailable(nlohmann_json)
-
 FetchContent_Declare(
     efsw
     GIT_REPOSITORY https://github.com/SpartanJ/efsw.git
     GIT_TAG        master
 )
-
-FetchContent_MakeAvailable(efsw)
-
 FetchContent_Declare(
     xxhash
     GIT_REPOSITORY https://github.com/Cyan4973/xxHash.git
     GIT_TAG        v0.8.3
     SOURCE_SUBDIR  cmake_unofficial
 )
+FetchContent_Declare(
+    cpp-httplib
+    GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+    GIT_TAG        v0.20.0
+)
 
-FetchContent_MakeAvailable(xxhash)
+FetchContent_MakeAvailable(
+    nlohmann_json
+    efsw
+    xxhash
+    cpp-httplib
+)
 
 add_executable(${PROJECT_NAME}
     test.cpp
@@ -53,4 +59,5 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Threads::Threads
     efsw
     xxhash
+    httplib::httplib
 )
