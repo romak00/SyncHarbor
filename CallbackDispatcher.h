@@ -32,6 +32,8 @@ private:
     std::atomic<bool> _should_stop{ false };
     ThreadSafeQueue<std::unique_ptr<ICommand>> _queue;
 
+    ActiveCount _active_count;
+
     std::unique_ptr<std::thread> _worker;
 
     std::unique_ptr<Database> _db;

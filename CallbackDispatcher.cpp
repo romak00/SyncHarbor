@@ -15,8 +15,8 @@ CallbackDispatcher::CallbackDispatcher() {
 
 void CallbackDispatcher::finish() {
     LOG_INFO("CallbackDispatcher", "Shutting down dispatcher...");
-    _should_stop = true;
-    _queue.notify();
+    _should_stop.store(true, std::memory_order_release);
+    _queue.close();
     if (_worker && _worker->joinable()) {
         _worker->join();
     }
@@ -34,25 +34,28 @@ void CallbackDispatcher::submit(std::unique_ptr<ICommand> command) {
     LOG_DEBUG(
         "CallbackDispatcher",
         "Callback submited for file: %s and cloud: %s",
-        command->getTargetFile(),
+        command->getTarget(),
         CloudResolver::getName(command->getId())
     );
+    _active_count.increment();
     _queue.push(std::move(command));
 }
 
 void CallbackDispatcher::worker() {
     ThreadNamer::setThreadName("CallbackWorker");
-    while (!_should_stop || !_queue.empty()) {
-        std::unique_ptr<ICommand> command;
-        while (_queue.pop(command, [&]() { return _should_stop.load(); })) {
-            int cloud_id = command->getId();
-            LOG_DEBUG(
-                "CallbackDispatcher",
-                "Callback started for file: %s and cloud: %s",
-                command->getTargetFile(),
-                CloudResolver::getName(command->getId())
-            );
-            command->completionCallback(*_db, *_clouds[cloud_id]);
+    std::unique_ptr<ICommand> command;
+    while (_queue.pop(command)) {
+        int cloud_id = command->getId();
+        LOG_DEBUG(
+            "CallbackDispatcher",
+            "Callback started for file: %s and cloud: %s",
+            command->getTarget(),
+            CloudResolver::getName(command->getId())
+        );
+        command->completionCallback(_db, _clouds[cloud_id]);
+        if (command->needRepeat()) {
+            HttpClient::get().submit(std::move(command));
         }
+        _active_count.decrement();
     }
 }

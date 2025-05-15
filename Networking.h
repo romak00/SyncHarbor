@@ -18,14 +18,19 @@ class HttpClient {
 public:
     static HttpClient& get();
     void submit(std::unique_ptr<ICommand> command);
-    void setMod(const std::string& mod);
     void setClouds(const std::unordered_map<int, std::shared_ptr<BaseStorage>>& clouds);
 
     void shutdown();
 
+    void syncRequest(const std::unique_ptr<RequestHandle>& handle);
+
+    bool isIdle() const noexcept;
+
+    void waitUntilIdle() const;
+
 private:
     HttpClient();
-    ~HttpClient() = default;
+    ~HttpClient();
 
 
     HttpClient(const HttpClient&) = delete;
@@ -50,10 +55,7 @@ private:
 
     CURLM* _large_multi_handle;
 
-    const int _MAX_CONCURRENT_LARGE = 120;
-    const int _MAX_CONCURRENT_SMALL = 7;
+    int _MAX_CONCURRENT = 120;
 
-    int _MAX_CONCURRENT;
-
-    int _large_active_count{ 0 };
+    ActiveCount _large_active_count;
 };

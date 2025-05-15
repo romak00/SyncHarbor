@@ -13,8 +13,100 @@
 #include <queue>
 #include <mutex>
 #include <condition_variable>
+#include <variant>
 
-inline std::time_t convert_cloud_time(std::string datetime) {
+class ActiveCount {
+public:
+
+    void increment() noexcept {
+        _count.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    void decrement() noexcept {
+        if (_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            std::lock_guard<std::mutex> lk(_mtx);
+            _cv.notify_all();
+        }
+    }
+
+    int get() const noexcept {
+        return _count.load(std::memory_order_acquire);
+    }
+
+    bool isIdle() const noexcept {
+        return get() == 0;
+    }
+
+    void waitUntilIdle() const {
+        std::unique_lock<std::mutex> lk(_mtx);
+        _cv.wait(lk, [&] {
+            return _count.load(std::memory_order_acquire) == 0;
+        });
+    }
+
+private:
+    mutable std::mutex _mtx;
+    mutable std::condition_variable _cv;
+    std::atomic<int> _count{ 0 };
+};
+
+inline std::string generate_uuid() {
+    std::random_device rd;
+    std::uniform_int_distribution<uint32_t> dist(0, 0xFFFFFFFF);
+    std::ostringstream ss;
+    ss << std::hex << std::setfill('0')
+        << std::setw(8) << dist(rd) << '-'
+        << std::setw(4) << (dist(rd) & 0xFFFF) << '-'
+        << std::setw(4) << ((dist(rd) & 0x0FFF) | 0x4000) << '-'
+        << std::setw(4) << ((dist(rd) & 0x3FFF) | 0x8000) << '-'
+        << std::setw(12)
+        << (static_cast<uint64_t>(dist(rd)) << 32 | dist(rd));
+    return ss.str();
+}
+
+class ICommand;
+
+enum class CloudProviderType {
+    LocalStorage,
+    GoogleDrive,
+    Dropbox,
+    OneDrive,
+    Yandex,
+    MailRu
+};
+
+inline const char* to_cstr(CloudProviderType type) {
+    switch (type)
+    {
+    case CloudProviderType::LocalStorage: return "LocalStorage";
+    case CloudProviderType::GoogleDrive: return "GoogleDrive";
+    case CloudProviderType::Dropbox: return "Dropbox";
+    case CloudProviderType::OneDrive: return "OneDrive";
+    case CloudProviderType::Yandex: return "Yandex";
+    case CloudProviderType::MailRu: return "MailRu";
+    default: return "Unknown";
+    }
+}
+
+inline std::string_view to_string(CloudProviderType type) {
+    return to_cstr(type);
+}
+
+inline CloudProviderType cloud_type_from_string(std::string_view str) {
+    static const std::unordered_map<std::string_view, CloudProviderType> map =
+    {
+        {"LocalStorage", CloudProviderType::LocalStorage},
+        {"GoogleDrive", CloudProviderType::GoogleDrive},
+        {"Dropbox", CloudProviderType::Dropbox},
+        {"OneDrive", CloudProviderType::OneDrive},
+        {"Yandex", CloudProviderType::Yandex},
+        {"MailRu", CloudProviderType::MailRu}
+    };
+
+    return map.at(str);
+}
+
+inline std::time_t convertCloudTime(std::string datetime) {
     datetime.pop_back();
     size_t dotPos = datetime.find('.');
     datetime = datetime.substr(0, dotPos);
@@ -24,6 +116,15 @@ inline std::time_t convert_cloud_time(std::string datetime) {
     return timegm(&tm);
 }
 
+inline std::time_t convertSystemTime(const std::filesystem::path& path) {
+    const auto ftime = std::filesystem::last_write_time(path);
+    auto fs_tp = std::chrono::file_clock::to_sys(ftime);
+    auto stime = std::chrono::time_point_cast<std::chrono::system_clock::duration>(fs_tp);
+    return std::chrono::system_clock::to_time_t(stime);
+}
+
+
+
 enum class EntryType : uint8_t {
     File = 0,
     Directory = 1,
@@ -31,7 +132,8 @@ enum class EntryType : uint8_t {
 };
 
 inline const char* to_cstr(EntryType type) {
-    switch (type) {
+    switch (type)
+    {
     case EntryType::File: return "File";
     case EntryType::Directory: return "Directory";
     case EntryType::Document: return "Document";
@@ -44,54 +146,122 @@ inline std::string_view to_string(EntryType type) {
 }
 
 inline EntryType entry_type_from_string(std::string_view str) {
-    static const std::unordered_map<std::string_view, EntryType> map = {
+    static const std::unordered_map<std::string_view, EntryType> map =
+    {
         {"File", EntryType::File},
         {"Directory", EntryType::Directory},
         {"Document", EntryType::Document}
     };
 
     auto it = map.find(str);
-    if (it != map.end()) return it->second;
-    throw std::invalid_argument("Invalid EntryType string: " + std::string(str));
+    if (it != map.end()) {
+        return it->second;
+    }
+    return EntryType::Document;
 }
-
-
-enum class UpdateType {
-    Metadata,
-    Contents,
-    All
-};
 
 class FileRecordDTO {
 public:
-    FileRecordDTO(
+    FileRecordDTO(                          // LocalStorage NEW
         const EntryType t,
         const std::filesystem::path& rp,
-        const size_t s,
+        const uint64_t s,
         const std::time_t cfmt,
-        const int hash
+        const uint64_t hash,
+        const uint64_t fid
     ) :
         type(t),
         rel_path(rp),
         size(s),
         cloud_file_modified_time(cfmt),
-        cloud_hash_check_sum(std::to_string(hash)),
-        cloud_id(0)
+        cloud_hash_check_sum(hash),
+        file_id(fid),
+        cloud_id(0),
+        global_id(0)
     {
     }
 
-    FileRecordDTO(const EntryType t,
-        const std::filesystem::path& rp,
-        const size_t s,
-        const std::time_t cfmt,
+    FileRecordDTO(                          // Cloud info from db
+        const int g_id,
+        const int c_id,
+        const std::string& parent,
+        const std::string& cf_id,
+        const uint64_t s,
         const std::string& hash,
-        const int cid)
-        : type(t),
+        const std::time_t cfmt
+    ) :
+        cloud_parent_id(parent),
+        cloud_id(c_id),
+        cloud_file_id(cf_id),
+        size(s),
+        cloud_file_modified_time(cfmt),
+        cloud_hash_check_sum(hash),
+        global_id(g_id),
+        file_id(0)
+    {
+    }
+
+    FileRecordDTO(                          // LocalStorage info from db
+        const int g_id,
+        const EntryType t,
+        const std::filesystem::path& rp,
+        const uint64_t s,
+        const uint64_t hash,
+        const std::time_t cfmt,
+        const uint64_t fid
+    ) :
+        type(t),
         rel_path(rp),
         size(s),
         cloud_file_modified_time(cfmt),
         cloud_hash_check_sum(hash),
-        cloud_id(cid)
+        file_id(fid),
+        global_id(g_id),
+        cloud_id(0)
+    {
+    }
+
+    FileRecordDTO(                          // NOT GoogleDrive Cloud NEW info
+        const EntryType t,
+        const std::filesystem::path& rp,
+        const std::string& cf_id,
+        const uint64_t s,
+        const std::time_t cfmt,
+        const std::string& hash,
+        const int cid
+    ) :
+        type(t),
+        rel_path(rp),
+        cloud_file_id(cf_id),
+        size(s),
+        cloud_file_modified_time(cfmt),
+        cloud_hash_check_sum(hash),
+        cloud_id(cid),
+        file_id(0),
+        global_id(0)
+    {
+    }
+
+    FileRecordDTO(                          // GoogleDrive Cloud NEW info
+        const EntryType t,
+        const std::string& parent,
+        const std::filesystem::path& rp,
+        const std::string& cf_id,
+        const uint64_t s,
+        const std::time_t cfmt,
+        const std::string& hash,
+        const int cid
+    ) :
+        type(t),
+        cloud_parent_id(parent),
+        rel_path(rp),
+        cloud_file_id(cf_id),
+        size(s),
+        cloud_file_modified_time(cfmt),
+        cloud_hash_check_sum(hash),
+        cloud_id(cid),
+        file_id(0),
+        global_id(0)
     {
     }
 
@@ -99,162 +269,271 @@ public:
     FileRecordDTO() = default;
     ~FileRecordDTO() = default;
 
-    FileRecordDTO(const FileRecordDTO& other)
-        : type(other.type),
-        global_id(other.global_id),
-        rel_path(other.rel_path),
-        cloud_parent_id(other.cloud_parent_id),
-        size(other.size),
-        cloud_file_id(other.cloud_file_id),
-        cloud_hash_check_sum(other.cloud_hash_check_sum),
-        cloud_file_modified_time(other.cloud_file_modified_time),
-        cloud_id(other.cloud_id)
-    {
-    }
-
-    FileRecordDTO(FileRecordDTO&& other) noexcept
-        : type(other.type),
-        global_id(other.global_id),
-        rel_path(std::move(other.rel_path)),
-        cloud_parent_id(std::move(other.cloud_parent_id)),
-        size(other.size),
-        cloud_file_id(std::move(other.cloud_file_id)),
-        cloud_hash_check_sum(std::move(other.cloud_hash_check_sum)),
-        cloud_file_modified_time(other.cloud_file_modified_time),
-        cloud_id(other.cloud_id)
-    {
-    }
+    FileRecordDTO(const FileRecordDTO& other) = default;
+    FileRecordDTO(FileRecordDTO&& other) noexcept = default;
 
     std::filesystem::path rel_path;
     std::string cloud_parent_id;
     std::string cloud_file_id;
-    std::string cloud_hash_check_sum;
-    size_t size;
+    std::variant<std::string, uint64_t> cloud_hash_check_sum;
+    uint64_t size;
+    uint64_t file_id;
     std::time_t cloud_file_modified_time;
     int global_id;
     int cloud_id;
     EntryType type;
 };
 
-class ChangeDTO {
+enum class ChangeType : uint8_t {
+    Null = 0,
+    New = 1 << 0,
+    Update = 1 << 1,
+    Move = 1 << 2,
+    Rename = 1 << 3,
+    Delete = 1 << 4
+};
+
+inline ChangeType operator|(ChangeType a, ChangeType b) {
+    return static_cast<ChangeType>(
+        static_cast<uint8_t>(a) | static_cast<uint8_t>(b)
+        );
+}
+
+inline ChangeType operator&(ChangeType a, ChangeType b) {
+    return static_cast<ChangeType>(
+        static_cast<uint8_t>(a) & static_cast<uint8_t>(b)
+        );
+}
+
+inline ChangeType operator~(ChangeType a) {
+    return static_cast<ChangeType>(
+        ~static_cast<uint8_t>(a)
+        );
+}
+
+class ChangeTypeFlags {
 public:
-    ChangeDTO(const std::string& rp, const EntryType t) : rel_path(rp), type(t)
+    ChangeTypeFlags() : value(ChangeType::New) {}
+    ChangeTypeFlags(ChangeType t) : value(t) {}
+
+    void add(ChangeType t) {
+        value = value | t;
+    }
+
+    void remove(ChangeType t) {
+        value = value & (~t);
+    }
+
+    bool contains(ChangeType t) const {
+        return (value & t) == t;
+    }
+
+    ChangeType raw() const { return value; }
+
+private:
+    ChangeType value;
+};
+
+class Change {
+public:
+    enum class Status { Pending, Completed, Cancelled };
+
+    Change(
+        ChangeTypeFlags t,
+        std::time_t ct,
+        std::unique_ptr<ICommand> fcmd
+    );
+
+    Change() = delete;
+    ~Change() = default;
+
+    Change(const Change& other) = delete;
+    Change(Change&& other) noexcept;
+    Change& operator=(const Change&) = delete;
+    Change& operator=(Change&& other) noexcept;
+
+    void setOnComplete(std::function<void(std::vector<std::unique_ptr<Change>>&& dependents)> cb);
+    void onCommandCreated();
+    void onCommandFinished();
+    void addDependent(std::unique_ptr<Change> change);
+
+private:
+    std::vector<std::unique_ptr<Change>> _dependents;
+    std::unique_ptr<ICommand> _first_cmd;
+    std::function<void(std::vector<std::unique_ptr<Change>>&& dependents)> _on_complete;
+    std::atomic<int> _pending_cmds;
+    std::time_t _change_time;
+    std::mutex _mtx;
+    std::atomic<bool> _procced = true;
+    Change::Status _status;
+    ChangeTypeFlags _type;
+};
+
+struct RawSignal {
+    std::mutex mtx;
+    std::condition_variable  cv;
+};
+
+class FileEvent {
+public:
+    FileEvent(
+        const std::filesystem::path& p,
+        const std::time_t tm,
+        const ChangeType tp,
+        std::shared_ptr<FileEvent> ass
+    ) :
+        path(p),
+        when(tm),
+        type(tp),
+        associated(ass),
+        file_id(0)
     {
     }
 
-    ChangeDTO() = default;
-    ~ChangeDTO() = default;
-
-    ChangeDTO(const ChangeDTO& other) : rel_path(other.rel_path), type(other.type)
+    FileEvent(
+        const std::filesystem::path& p,
+        const std::time_t tm,
+        const ChangeType tp
+    ) :
+        path(p),
+        when(tm),
+        type(tp),
+        associated(nullptr),
+        file_id(0)
     {
     }
 
-    ChangeDTO(ChangeDTO&& other) noexcept : rel_path(std::move(other.rel_path)), type(other.type)
-    {
-    }
+    FileEvent() = default;
+    ~FileEvent() = default;
+    FileEvent(const FileEvent& other) = default;
+    FileEvent& operator=(const FileEvent& other) = default;
 
-    std::filesystem::path rel_path;
-    EntryType type;
+    FileEvent& operator=(FileEvent&& other) noexcept = default;
+    FileEvent(FileEvent&& other) noexcept = default;
+
+    std::filesystem::path path;
+    std::shared_ptr<FileEvent> associated;
+    uint64_t file_id;
+    std::time_t when;
+    ChangeType type;
 };
 
 class FileModifiedDTO {
 public:
-    FileModifiedDTO(const std::filesystem::path& rp,
+    FileModifiedDTO(                        // LocalStorage Modify
+        const EntryType t,
+        const ChangeTypeFlags flags,
+        const int gid,
+        const std::uint64_t chcs,
+        const std::time_t cfmt,
+        const std::filesystem::path& orp,
+        const std::filesystem::path& nrp,
+        const uint64_t s,
+        const uint64_t fid
+    ) :
+        global_id(gid),
+        cloud_hash_check_sum(chcs),
+        old_rel_path(orp),
+        new_rel_path(nrp),
+        cloud_file_modified_time(cfmt),
+        type(t),
+        size(s),
+        file_id(fid),
+        change_flags(flags),
+        cloud_id(0)
+    {
+    }
+
+    FileModifiedDTO(                        // Cloud Modify
+        const EntryType t,
+        const ChangeTypeFlags flags,
         const int gid,
         const int cid,
         const std::string& cfid,
         const std::string& chcs,
+        const std::time_t cfmt,
+        const std::filesystem::path& orp,
+        const std::filesystem::path& nrp,
         const std::string& old_cpid,
         const std::string& new_cpid,
-        const std::string& new_n,
-        const std::time_t cfmt,
-        const EntryType t)
-        : rel_path(rp),
+        const uint64_t s
+    ) :
         global_id(gid),
         cloud_id(cid),
         cloud_file_id(cfid),
         cloud_hash_check_sum(chcs),
         old_cloud_parent_id(old_cpid),
         new_cloud_parent_id(new_cpid),
-        new_name(new_n),
+        old_rel_path(orp),
+        new_rel_path(nrp),
         cloud_file_modified_time(cfmt),
-        type(t)
+        type(t),
+        size(s),
+        change_flags(flags),
+        file_id(0)
     {
     }
 
     FileModifiedDTO() = default;
     ~FileModifiedDTO() = default;
 
-    FileModifiedDTO(const FileModifiedDTO& other)
-        : rel_path(other.rel_path),
-        global_id(other.global_id),
-        cloud_id(other.cloud_id),
-        cloud_file_id(other.cloud_file_id),
-        cloud_hash_check_sum(other.cloud_hash_check_sum),
-        old_cloud_parent_id(other.old_cloud_parent_id),
-        new_cloud_parent_id(other.new_cloud_parent_id),
-        new_name(other.new_name),
-        cloud_file_modified_time(other.cloud_file_modified_time),
-        type(other.type)
-    {
-    }
+    FileModifiedDTO(const FileModifiedDTO& other) = default;
+    FileModifiedDTO(FileModifiedDTO&& other) noexcept = default;
 
-    FileModifiedDTO(FileModifiedDTO&& other) noexcept
-        : rel_path(std::move(other.rel_path)),
-        global_id(other.global_id),
-        cloud_id(other.cloud_id),
-        cloud_file_id(std::move(other.cloud_file_id)),
-        cloud_hash_check_sum(std::move(other.cloud_hash_check_sum)),
-        old_cloud_parent_id(std::move(other.old_cloud_parent_id)),
-        new_cloud_parent_id(std::move(other.new_cloud_parent_id)),
-        new_name(std::move(other.new_name)),
-        cloud_file_modified_time(other.cloud_file_modified_time),
-        type(other.type)
-    {
-    }
-
-    std::filesystem::path rel_path;
+    std::filesystem::path old_rel_path;
+    std::filesystem::path new_rel_path;
     std::string cloud_file_id;
-    std::string cloud_hash_check_sum;
+    std::variant<std::string, uint64_t> cloud_hash_check_sum;
     std::string old_cloud_parent_id;
     std::string new_cloud_parent_id;
-    std::string new_name;
+    uint64_t size;
     std::time_t cloud_file_modified_time;
+    uint64_t file_id;
     int global_id;
     int cloud_id;
     EntryType type;
+    ChangeTypeFlags change_flags;
 };
 
 class FileDeletedDTO {
 public:
-    FileDeletedDTO(const std::string& rp,
+    FileDeletedDTO(                        // LocalStorage Delete
+        const std::filesystem::path& rp,
+        const int gid,
+        const std::time_t t
+    ) :
+        rel_path(rp),
+        global_id(gid),
+        when(t),
+        cloud_id(0)
+    {
+    }
+
+    FileDeletedDTO(                         // Cloud Delete
+        const std::filesystem::path& rp,
+        const int gid,
+        const int cid,
         const std::string& cfid,
-        const int cid)
-        : rel_path(rp),
+        const std::time_t t
+    ) :
+        rel_path(rp),
+        global_id(gid),
+        cloud_id(cid),
         cloud_file_id(cfid),
-        cloud_id(cid)
+        when(t)
     {
     }
 
     FileDeletedDTO() = default;
     ~FileDeletedDTO() = default;
 
-    FileDeletedDTO(const FileDeletedDTO& other)
-        : rel_path(other.rel_path),
-        cloud_file_id(other.cloud_file_id),
-        cloud_id(other.cloud_id)
-    {
-    }
+    FileDeletedDTO(const FileDeletedDTO& other) = default;
+    FileDeletedDTO(FileDeletedDTO&& other) noexcept = default;
 
-    FileDeletedDTO(FileDeletedDTO&& other) noexcept
-        : rel_path(std::move(other.rel_path)),
-        cloud_file_id(std::move(other.cloud_file_id)),
-        cloud_id(other.cloud_id)
-    {
-    }
-
-    std::string rel_path;
+    std::filesystem::path rel_path;
     std::string cloud_file_id;
+    std::time_t when;
+    int global_id;
     int cloud_id;
 };
 
@@ -299,7 +578,7 @@ public:
             _iofd.seekg(0, std::ios::beg);
         }
 
-        _response = "";
+        _response.clear();
         _retry_count++;
         if (_retry_count > 5) {
             throw std::runtime_error("Too many retry attempts on a request");
@@ -335,6 +614,11 @@ public:
 
     void addHeaders(const std::string& header) {
         _headers = curl_slist_append(_headers, header.c_str());
+    }
+    
+    void clearHeaders(){
+        curl_slist_free_all(_headers);
+        _headers = nullptr;
     }
 
     void setCommonCURLOpt() {
@@ -431,20 +715,33 @@ public:
     template<typename U>
     void push(U&& request) {
         std::lock_guard<std::mutex> lock(_mutex);
-        _queue.push(std::forward<U>(request));
-        _cv.notify_all();
+        _queue.emplace(std::forward<U>(request));
+        _cv.notify_one();
+    }
+
+    void push(std::vector<T>&& request_vec) {
+        std::lock_guard<std::mutex> lock(_mutex);
+        for (auto& elem : request_vec) {
+            _queue.emplace(std::move(elem));
+        }
+        _cv.notify_one();
+    }
+
+    bool try_pop(T& out) {
+        std::lock_guard<std::mutex> lock(_mutex);
+        if (_queue.empty()) {
+            return false;
+        }
+        out = std::move(_queue.front());
+        _queue.pop();
+        return true;
     }
 
     bool pop(T& out) {
-        return pop(out, []() { return false; });
-    }
-
-    template<typename Predicate>
-    bool pop(T& out, Predicate&& externalCondition) {
         std::unique_lock<std::mutex> lock(_mutex);
         _cv.wait(lock, [&]() {
-            return !_queue.empty() || externalCondition();
-            });
+            return !_queue.empty() || _closed.load(std::memory_order_acquire);
+        });
         if (!_queue.empty()) {
             out = std::move(_queue.front());
             _queue.pop();
@@ -458,12 +755,46 @@ public:
         return _queue.empty();
     }
 
-    void notify() const {
+    void close() {
+        _closed.store(true, std::memory_order_release);
         _cv.notify_all();
+    }
+
+    int size() const {
+        std::lock_guard<std::mutex> lock(_mutex);
+        return _queue.size();
     }
 
 private:
     std::queue<T> _queue;
     mutable std::mutex _mutex;
     mutable std::condition_variable _cv;
+    std::atomic<bool> _closed{ false };
+};
+
+
+class ThreadSafeEventsregister {
+public:
+    
+    ThreadSafeEventsregister() = default;
+    ~ThreadSafeEventsregister() = default;
+    
+    void add(const std::string& path, ChangeType ct) {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _map.emplace(path, ct);
+    }
+
+    bool check(const std::string& path, ChangeType ct) {
+        std::lock_guard<std::mutex> lock(_mutex);
+        if (_map.contains(path) && _map[path] == ct) {
+            _map.erase(path);
+            return true;
+        }
+        return false;
+    }
+
+
+private:
+    std::unordered_map<std::string, ChangeType> _map;
+    std::mutex _mutex;
 };
