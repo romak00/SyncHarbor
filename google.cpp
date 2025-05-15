@@ -1,5 +1,6 @@
 #include "google.h"
 #include "Networking.h"
+#include "logger.h"
 
 inline static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* output) {
     size_t totalSize = size * nmemb;
@@ -19,110 +20,182 @@ GoogleDrive::GoogleDrive(
     const std::string& refresh_token,
     const std::filesystem::path& home_dir,
     const std::filesystem::path& local_home_dir,
+    const std::shared_ptr<Database>& db_conn,
     const int cloud_id
 )
     :
     _client_id(client_id),
     _client_secret(client_secret),
-    _refresh_token(refresh_token),
-    _id(cloud_id)
+    //_refresh_token(refresh_token),
+    _local_home_path(local_home_dir),
+    _db(db_conn),
+    _id(cloud_id),
+    _home_path(home_dir)
 {
-
-    //_refresh_token = GoogleDrive::first_time_auth();
-    _local_home_path = local_home_dir;
-
-    _access_token = GoogleDrive::getAccessToken();
-    _home_dir_id = GoogleDrive::get_dir_id_by_path(home_dir);
-    _dir_id_map.emplace(".", _home_dir_id);
 }
-GoogleDrive::GoogleDrive(const std::string& client_id, const std::string& client_secret, const std::string& refresh_token, const std::filesystem::path& home_dir, const std::filesystem::path& local_home_dir, const int cloud_id, const std::string& start_page_token)
-    : _client_id(client_id), _client_secret(client_secret), _refresh_token(refresh_token), _page_token(start_page_token), _id(cloud_id) {
 
-    _local_home_path = local_home_dir;
-    _access_token = GoogleDrive::getAccessToken();
+GoogleDrive::GoogleDrive(
+    const std::string& client_id,
+    const std::string& client_secret,
+    const std::filesystem::path& home_dir,
+    const std::filesystem::path& local_home_dir,
+    const std::shared_ptr<Database>& db_conn,
+    const int cloud_id
+)
+    :
+    _client_id(client_id),
+    _client_secret(client_secret),
+    _local_home_path(local_home_dir),
+    _db(db_conn),
+    _id(cloud_id),
+    _home_path(home_dir)
+{
+}
+
+GoogleDrive::GoogleDrive(
+    const std::string& client_id,
+    const std::string& client_secret,
+    const std::string& refresh_token,
+    const std::filesystem::path& home_dir,
+    const std::filesystem::path& local_home_dir,
+    const std::shared_ptr<Database>& db_conn,
+    const int cloud_id,
+    const std::string& start_page_token
+) :
+    _client_id(client_id),
+    _client_secret(client_secret),
+    //_refresh_token(refresh_token),
+    _local_home_path(local_home_dir),
+    _page_token(start_page_token),
+    _db(db_conn),
+    _id(cloud_id),
+    _home_path(home_dir)
+{
+}
+
+void GoogleDrive::refreshAccessToken() {
+    auto handle = std::make_unique<RequestHandle>();
+
+    std::string post =
+        "client_id=" + _client_id +
+        "&client_secret=" + _client_secret +
+        "&refresh_token=" + _refresh_token +
+        "&grant_type=refresh_token";
+
+    curl_easy_setopt(handle->_curl, CURLOPT_URL,
+        "https://oauth2.googleapis.com/token");
+    curl_easy_setopt(handle->_curl, CURLOPT_POSTFIELDS, post.c_str());
+    curl_easy_setopt(handle->_curl, CURLOPT_POST, 1L);
+    handle->setCommonCURLOpt();
+
+    HttpClient::get().syncRequest(handle);
+    proccessAuth(handle->_response);
 }
 
 void GoogleDrive::setupUpdateHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileModifiedDTO>& dto) const {}
-void GoogleDrive::setupDownloadHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileRecordDTO>& dto) const {}
+
 void GoogleDrive::setupDeleteHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileDeletedDTO>& dto) const {}
 
-std::vector<std::unique_ptr<ChangeDTO>> GoogleDrive::initialFiles() {
-    std::vector<std::unique_ptr<ChangeDTO>> dummy;
-    return dummy;
+std::vector<std::unique_ptr<FileRecordDTO>> GoogleDrive::initialFiles() {
+    return {};
 }
 
+std::filesystem::path GoogleDrive::normalizePath(const std::filesystem::path& p) {
+    std::string s = p.generic_string();
 
-
-
-
-std::string GoogleDrive::get_dir_id_by_path(const std::filesystem::path& path) {
-    CURL* curl = curl_easy_init();
-    if (!curl) {
-        std::cerr << "Ошибка инициализации cURL" << std::endl;
-        return "";
+    if (s == "/") {
+        return std::filesystem::path{};
     }
-    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
 
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, ("Authorization: Bearer " + _access_token).c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    if (!s.empty() && s.front() == '/') {
+        s.erase(0, 1);
+    }
 
-    std::string response;
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    return std::filesystem::path{s};
+}
+
+void GoogleDrive::ensureRootExists() {
+    auto handle = std::make_unique<RequestHandle>();
+
+    handle->addHeaders("Authorization: Bearer " + _access_token);
+    curl_easy_setopt(handle->_curl, CURLOPT_HTTPGET, 1L);
+    handle->setCommonCURLOpt();
+
+    auto path = this->normalizePath(_home_path);
 
     std::string parent_id = "root";
+    bool found_all = true;
 
-    for (const auto& part : path.relative_path()) {
-        std::string query = "https://www.googleapis.com/drive/v3/files?"
-            "q=name%20%3D%20%27" + part.string() +
-            "%27%20and%20mimeType%20%3D%20%27application%2Fvnd.google-apps.folder%27"
-            "%20and%20%27" + parent_id + "%27%20in%20parents"
-            "%20and%20trashed%3Dfalse&"
-            "fields=files(id)";
+    for (const auto& seg : path) {
+        const std::string name = seg.string();
 
-        curl_easy_setopt(curl, CURLOPT_URL, query.c_str());
+        if (found_all) {
+            std::string q = "name='" + name +
+                "' and mimeType='application/vnd.google-apps.folder'" +
+                " and '" + parent_id + "' in parents and trashed=false";
+            char* eq = curl_easy_escape(handle->_curl, q.c_str(), (int)q.size());
+            std::string url =
+                "https://www.googleapis.com/drive/v3/files"
+                "?q=" + std::string(eq) +
+                "&fields=files(id)";
+            curl_free(eq);
 
-        CURLcode res = curl_easy_perform(curl);
+            curl_easy_setopt(handle->_curl, CURLOPT_HTTPGET, 1L);
+            curl_easy_setopt(handle->_curl, CURLOPT_URL, url.c_str());
+            handle->_response.clear();
 
-        long http_code = 0;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+            HttpClient::get().syncRequest(handle);
 
-        if (res != CURLE_OK) {
-            std::cerr << "Ошибка cURL: " << curl_easy_strerror(res) << '\n';
-            curl_slist_free_all(headers);
-            curl_easy_cleanup(curl);
-            return "";
+            auto j = nlohmann::json::parse(handle->_response);
+            if (j.contains("files") && !j["files"].empty()) {
+                parent_id = j["files"][0]["id"].get<std::string>();
+                continue;
+            }
+            found_all = false;
         }
 
-        if (http_code != 200) {
-            std::cerr << "Ошибка HTTP: " << http_code << '\n';
-            curl_slist_free_all(headers);
-            curl_easy_cleanup(curl);
-            return "";
-        }
+        {
+            handle->clearHeaders();
 
-        auto json_curr_resp = nlohmann::json::parse(response);
-        parent_id = json_curr_resp["files"][0]["id"];
-        response = "";
+            nlohmann::json body = {
+                {"name",     name},
+                {"mimeType","application/vnd.google-apps.folder"},
+                {"parents", { parent_id }}
+            };
+            std::string payload = body.dump();
+
+            curl_easy_setopt(handle->_curl, CURLOPT_HTTPGET, 0L);
+            curl_easy_setopt(handle->_curl, CURLOPT_POST, 1L);
+
+            curl_easy_setopt(handle->_curl, CURLOPT_URL, "https://www.googleapis.com/drive/v3/files");
+            curl_easy_setopt(handle->_curl, CURLOPT_POSTFIELDS, payload.c_str());
+            handle->_response.clear();
+
+            handle->addHeaders("Authorization: Bearer " + _access_token);
+            handle->addHeaders("Content-Type: application/json; charset=UTF-8");
+            curl_easy_setopt(handle->_curl, CURLOPT_HTTPHEADER, handle->_headers);
+
+
+            HttpClient::get().syncRequest(handle);
+
+            auto j2 = nlohmann::json::parse(handle->_response);
+            parent_id = j2["id"].get<std::string>();
+        }
     }
 
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
-
-    return std::move(parent_id);
+    _home_dir_id = parent_id;
 }
 
 void GoogleDrive::setupUploadHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileRecordDTO>& dto) const {
     if (!handle->_curl) {
         throw std::runtime_error("Error initializing curl Google::UploadOperation");
     }
-    
+
     nlohmann::json j;
     j["name"] = dto->rel_path.filename().string();
     j["parents"] = { _home_dir_id };
     handle->addHeaders("Authorization: Bearer " + _access_token);
-    
+
     if (dto->type == EntryType::File) {
         const std::string metadata = j.dump();
         handle->_mime = curl_mime_init(handle->_curl);
@@ -147,7 +220,38 @@ void GoogleDrive::setupUploadHandle(const std::unique_ptr<RequestHandle>& handle
         curl_easy_setopt(handle->_curl, CURLOPT_COPYPOSTFIELDS, metadata.c_str());
     }
     handle->setCommonCURLOpt();
+
+    _expected_events.add(dto->rel_path, ChangeType::New);
 }
+
+void GoogleDrive::setupDownloadHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileRecordDTO>& dto) const {
+    std::string url = "https://www.googleapis.com/drive/v3/files/" + dto->cloud_file_id + "?alt=media";
+
+    handle->addHeaders("Authorization: Bearer " + _access_token);
+
+    auto path = _local_home_path / dto->rel_path;
+
+    handle->setFileStream(path, std::ios::out);
+
+    curl_easy_setopt(handle->_curl, CURLOPT_URL, url.c_str());
+
+    handle->setCommonCURLOpt();
+}
+
+void GoogleDrive::setupDownloadHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileModifiedDTO>& dto) const {
+    std::string url = "https://www.googleapis.com/drive/v3/files/" + dto->cloud_file_id + "?alt=media";
+
+    handle->addHeaders("Authorization: Bearer " + _access_token);
+
+    auto path = _local_home_path / dto->new_rel_path.parent_path() / (".-tmp-cloudsync-" + dto->new_rel_path.filename().string());
+
+    handle->setFileStream(path, std::ios::out);
+
+    curl_easy_setopt(handle->_curl, CURLOPT_URL, url.c_str());
+
+    handle->setCommonCURLOpt();
+}
+
 
 /* std::unique_ptr<CurlEasyHandle> GoogleDrive::create_file_delete_handle(const std::string& id) {
     std::unique_ptr<CurlEasyHandle> easy_handle = std::make_unique<CurlEasyHandle>();
@@ -283,132 +387,78 @@ std::unique_ptr<CurlEasyHandle> GoogleDrive::create_parent_update_handle(const s
     return std::move(easy_handle);
 } */
 
-void GoogleDrive::generateAuthURL() {
-    std::string url = "https://accounts.google.com/o/oauth2/v2/auth?"
-        "response_type=code&"
-        "client_id=" + _client_id +
-        "&redirect_uri=http://localhost" +
-        "&scope=https://www.googleapis.com/auth/drive" +
-        "&access_type=offline";
-    std::cout << url << std::endl;
+std::string GoogleDrive::buildAuthURL(int local_port) const {
+    std::string redirect = "http://localhost:" +
+        std::to_string(local_port) +
+        "/oauth2callback";
+
+    char* enc_redirect = curl_easy_escape(nullptr, redirect.c_str(), 0);
+    char* enc_scope = curl_easy_escape(nullptr,
+        "https://www.googleapis.com/auth/drive", 0);
+
+    std::ostringstream oss;
+    oss << "https://accounts.google.com/o/oauth2/v2/auth?"
+        << "client_id=" << _client_id
+        << "&redirect_uri=" << enc_redirect
+        << "&response_type=code"
+        << "&scope=" << enc_scope
+        << "&access_type=offline"
+        << "&prompt=consent";
+
+    curl_free(enc_redirect);
+    curl_free(enc_scope);
+    return oss.str();
 }
 
-std::string GoogleDrive::getRefreshToken(const std::string& auth_code) {
-    CURL* curl = curl_easy_init();
-    std::string response;
-    if (!curl) {
-        throw std::runtime_error("Error init curl GoogleDrive get_refresh_token");
-    }
+void GoogleDrive::getRefreshToken(const std::string& code, const int local_port) {
+    auto handle = std::make_unique<RequestHandle>();
 
-
-    std::string post_fields = "code=" + auth_code +
+    std::string post_fields =
+        "code=" + code +
         "&client_id=" + _client_id +
         "&client_secret=" + _client_secret +
-        "&redirect_uri=http://localhost" +
+        "&redirect_uri=http://localhost:" + std::to_string(local_port) + "/oauth2callback"
         "&grant_type=authorization_code";
 
-    curl_easy_setopt(curl, CURLOPT_URL, "https://oauth2.googleapis.com/token");
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_fields.c_str());
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(handle->_curl, CURLOPT_URL, "https://oauth2.googleapis.com/token");
+    curl_easy_setopt(handle->_curl, CURLOPT_POSTFIELDS, post_fields.c_str());
+    curl_easy_setopt(handle->_curl, CURLOPT_POST, 1L);
 
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    handle->setCommonCURLOpt();
 
-    CURLcode res = curl_easy_perform(curl);
-    if (res != CURLE_OK) {
-        curl_easy_cleanup(curl);
-        throw std::runtime_error("Error getting refresh token GoogleDrive get_refresh_token");
+    HttpClient::get().syncRequest(handle);
+    proccessAuth(handle->_response);
+}
+
+void GoogleDrive::proccessAuth(const std::string& responce) {
+    auto j = nlohmann::json::parse(responce);
+
+    _access_token = j["access_token"].get<std::string>();
+
+    if (j.contains("refresh_token")) {
+        std::string new_refresh = j["refresh_token"].get<std::string>();
+        _refresh_token = new_refresh;
     }
 
-    curl_easy_cleanup(curl);
+    int expires_in = j["expires_in"].get<int>();
+    _access_token_expires = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) + expires_in;
 
-
-    auto json_response = nlohmann::json::parse(response);
-    std::string refresh_token = json_response["refresh_token"];
-
-    return refresh_token;
+    LOG_INFO("AUTH", "GoogleCloud with id: %i tokens updated, expires in %i", _id, expires_in);
 }
 
-void GoogleDrive::insert_path_id_mapping(const std::string& path, const std::string& id) {
-    if (!_dir_id_map.contains(path)) {
-        _dir_id_map.emplace(path, id);
-    }
-}
-const std::string GoogleDrive::get_path_id_mapping(const std::string& path) const {
-    if (_dir_id_map.contains(path)) {
-        return _dir_id_map.at(path);
-    }
-    else {
-        return "";
-    }
+void GoogleDrive::setDelta(const std::string& response) {
+    auto j = nlohmann::json::parse(response);
+    _page_token = j["startPageToken"];
 }
 
-std::string GoogleDrive::getAccessToken() {
-    CURL* curl = curl_easy_init();
-    std::string response;
-
-    if (curl) {
-        std::string postFields = "&client_id=" + _client_id +
-            "&client_secret=" + _client_secret +
-            "&refresh_token=" + _refresh_token +
-            "&grant_type=refresh_token";
-
-        curl_easy_setopt(curl, CURLOPT_URL, "https://oauth2.googleapis.com/token");
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postFields.c_str());
-
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-
-        CURLcode res = curl_easy_perform(curl);
-        if (res != CURLE_OK) {
-            std::cerr << "Error: " << curl_easy_strerror(res) << std::endl;
-        }
-
-        curl_easy_cleanup(curl);
-    }
-
-
-    auto json_response = nlohmann::json::parse(response);
-    std::string access_token = json_response["access_token"];
-
-    return access_token;
+void GoogleDrive::getDelta(const std::unique_ptr<RequestHandle>& handle) {
+    handle->addHeaders("Authorization: Bearer " + _access_token);
+    curl_easy_setopt(handle->_curl, CURLOPT_URL,
+        "https://www.googleapis.com/drive/v3/changes/startPageToken");
+    handle->setCommonCURLOpt();
 }
 
-std::string GoogleDrive::first_time_auth() {
-    generateAuthURL();
-    std::string auth_code = "";
-    std::cin >> auth_code;
-    std::string refresh_token = GoogleDrive::getRefreshToken(auth_code);
-
-    return refresh_token;
-}
-
-void GoogleDrive::get_start_page_token() {
-    CURL* curl = curl_easy_init();
-    std::string response;
-    std::string url = "https://www.googleapis.com/drive/v3/changes/startPageToken";
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, ("Authorization: Bearer " + _access_token).c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-
-    CURLcode res = curl_easy_perform(curl);
-
-    const auto parsed_json = nlohmann::json::parse(response);
-    _page_token = parsed_json["startPageToken"];
-
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
-}
-
-std::vector<std::unique_ptr<ChangeDTO>> GoogleDrive::scanForChanges(const std::shared_ptr<Database> db_conn) {
-    CURL* curl = curl_easy_init();
-    std::string response;
-    std::vector<nlohmann::json> pages;
-
+void GoogleDrive::getChanges(const std::unique_ptr<RequestHandle>& handle) {
     std::string url = "https://www.googleapis.com/drive/v3/changes?"
         "pageToken=" + _page_token + "&fields=newStartPageToken%2CnextPageToken%2C"
         "changes%28file%28id%2Ctrashed%2Cname%2CmodifiedTime%2CmimeType%2Cparents%2Cmd5Checksum%29%29"
@@ -417,173 +467,255 @@ std::vector<std::unique_ptr<ChangeDTO>> GoogleDrive::scanForChanges(const std::s
         "&restrictToMyDrive=false"
         "&supportsAllDrives=false";
 
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(handle->_curl, CURLOPT_URL, url.c_str());
+    handle->addHeaders("Authorization: Bearer " + _access_token);
+    handle->setCommonCURLOpt();
+}
 
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, ("Authorization: Bearer " + _access_token).c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+void GoogleDrive::setRawSignal(std::shared_ptr<RawSignal> raw_signal) {
+    _raw_signal = std::move(raw_signal);
+}
 
-    CURLcode res = curl_easy_perform(curl);
-    auto changes = nlohmann::json::parse(response);
-    while (changes.contains("nextPageToken")) {
-        pages.push_back(changes["changes"]);
-        response = "";
-        changes.clear();
-        _page_token = changes["nextPageToken"];
-        std::string url = "https://www.googleapis.com/drive/v3/changes?"
-            "pageToken=" + _page_token + "&fields=newStartPageToken%2CnextPageToken%2C"
-            "changes%28file%28id%2Ctrashed%2Cname%2CmodifiedTime%2CmimeType%2Cparents%29%29"
-            "&includeItemsFromAllDrives=false"
-            "&includeRemoved=false"
-            "&restrictToMyDrive=false"
-            "&supportsAllDrives=false";
-        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-        CURLcode res = curl_easy_perform(curl);
-        auto page = nlohmann::json::parse(response);
-    }
+std::vector<std::unique_ptr<Change>> GoogleDrive::proccessChanges() {
+    std::vector<std::unique_ptr<Change>> changes;
+    std::vector<std::string> raw_pages;
 
-    _page_token = changes["newStartPageToken"];
-    pages.push_back(changes["changes"]);
-
-    std::vector<nlohmann::json> changes_vec;
-    for (const auto& page : pages) {
-        for (const auto& change : page) {
-            nlohmann::json file_change;
-
-            if (change.contains("file")) {
-                file_change = change["file"];
-            }
-            else {
-                throw std::runtime_error("weird change file: " + change.dump());
-            }
-            std::cout << file_change << '\n';
-            nlohmann::json cloud_file_info = db_conn->get_cloud_file_info(file_change["id"], _id);
-            nlohmann::json change_template, data;
-            data["tag"] = "NULL";
-            data["cloud_id"] = _id;
-            data["cloud_file_id"] = file_change["id"];
-            std::string tmp_type = file_change["mimeType"] == "application/vnd.google-apps.folder" ? "dir" : "file";
-            data["type"] = tmp_type;
-            int mod_time = convert_cloud_time(file_change["modifiedTime"]);
-            data["cloud_file_modified_time"] = mod_time;
-            data["cloud_hash_check_sum"] = "NULL";
-            if (cloud_file_info.empty() && file_change["trashed"] == false) {
-                nlohmann::json cloud_parent_info;
-                if (file_change.contains("parents")) {
-                    cloud_parent_info = db_conn->get_cloud_file_info(file_change["parents"][0], data["cloud_id"]);
-                }
-                if (!cloud_parent_info.empty()) {
-                    data["tag"] = "NEW";
-                    data["cloud_parent_id"] = file_change["parents"][0];
-                    data["cloud_hash_check_sum"] = file_change.contains("md5Checksum") ? file_change["md5Checksum"] : "NULL";
-                    std::string tmp_str = db_conn->find_path_by_global_id(cloud_parent_info["global_id"]).string();
-                    change_template["file"] = tmp_str + "/" + file_change["name"].get<std::string>();
-                }
-                // not our file
-                    // just skipping
-                else {
-                    // TODO: consider where some "older" parent might be ours (need to make some kind of chain map??)
+    if (_events_buff.try_pop(raw_pages)) {
+        std::unordered_map<std::string, std::filesystem::path> path_map;
+        std::unordered_map<std::string, std::unique_ptr<FileRecordDTO>> maybe_new;
+        for (const auto& raw_page : raw_pages) {
+            auto page = nlohmann::json::parse(raw_page);
+            for (auto& change : page) {
+                if (!change.contains("file")) {
+                    LOG_WARNING("GoogleDrive", "Change without file field: %s", change.dump().c_str());
                     continue;
                 }
-            }
-            else if (file_change["trashed"] == true) {
-                data["tag"] = "DELETED";
-                data["global_id"] = cloud_file_info["global_id"];
-            }
-            else if (mod_time > cloud_file_info["cloud_file_modified_time"] || file_change["name"] != (db_conn->find_path_by_global_id(cloud_file_info["global_id"])).filename().string()) {
-                data["tag"] = "CHANGED";
-                data["global_id"] = cloud_file_info["global_id"];
-                data["cloud_parent_id"] = file_change["parents"][0];
-                data["name"] = file_change["name"];
-                if (file_change.contains("md5Checksum")) {
-                    data["cloud_hash_check_sum"] = file_change["md5Checksum"];
-                    if (file_change["md5Checksum"] != cloud_file_info["cloud_hash_check_sum"]) {
-                        data["changed"] = true;
-                    }
-                }
-                else if (tmp_type == "file") {
-                    data["changed"] = true;
+                auto const& file = change["file"];
+                bool trashed = file.value("trashed", false);
+                bool is_folder = (file["mimeType"] == "application/vnd.google-apps.folder");
+                std::string cloud_file_id = file["id"];
+                EntryType type = is_folder ? EntryType::Directory : EntryType::File;
+                std::time_t cloud_file_modified_time = convertCloudTime(file["modifiedTime"]);
+                uint64_t size = file.value("size", 0ULL);
+                std::string name = file.value("name", std::string{});
+
+                if (ignoreTmp(name)) {
+                    LOG_DEBUG("GoogleDrive", "Ignoring tmp: %s", change.dump().c_str());
+                    continue;
                 }
 
-                if (file_change["name"] != (db_conn->find_path_by_global_id(cloud_file_info["global_id"])).filename().string()) {
-                    data["renamed"] = true;
+                std::string cloud_parent_id = file.contains("parents") ? file["parents"][0].get<std::string>() : "";
+
+                auto file_link = _db->getFileByCloudIdAndCloudFileId(_id, cloud_file_id);
+                ChangeTypeFlags flags{ ChangeType::Null };
+                int global_id = 0;
+                std::filesystem::path old_rel_path, new_rel_path;
+                std::string old_cloud_parent_id, new_cloud_parent_id;
+                std::string cloud_hash_check_sum = file.value("md5Checksum", std::string{});
+                std::filesystem::path rel_path;
+
+                if (file_link == nullptr) {
+                    // NEW
+                    if (!trashed && !cloud_parent_id.empty()) {
+                        auto parent_link = _db->getFileByCloudIdAndCloudFileId(_id, cloud_parent_id);
+                        if (parent_link != nullptr) {
+                            int parent_global_id = parent_link->global_id;
+                            auto parent_path = _db->getPathByGlobalId(parent_global_id);
+                            rel_path = parent_path / name;
+
+                            if (_expected_events.check(rel_path, ChangeType::New)) {
+                                LOG_DEBUG("GoogleDrive", "Expected change: %s", change.dump().c_str());
+                            }
+
+                            flags.add(ChangeType::New);
+                            if (type == EntryType::Directory) {
+                                path_map.emplace(
+                                    cloud_file_id,
+                                    rel_path
+                                );
+                            }
+                        }
+                        else {
+                            if (path_map.contains(cloud_parent_id)) {
+                                auto parent_path = path_map[cloud_parent_id];
+                                rel_path = parent_path / name;
+
+                                if (_expected_events.check(rel_path, ChangeType::New)) {
+                                    LOG_DEBUG("GoogleDrive", "Expected NEW: %s", change.dump().c_str());
+                                    continue;
+                                }
+
+                                flags.add(ChangeType::New);
+                                if (type == EntryType::Directory) {
+                                    path_map.emplace(
+                                        cloud_file_id,
+                                        rel_path
+                                    );
+                                }
+                            }
+                            else {
+                                maybe_new.emplace(
+                                    cloud_file_id,
+                                    std::make_unique<FileRecordDTO>(
+                                        type,
+                                        cloud_parent_id,
+                                        "",
+                                        cloud_file_id,
+                                        size,
+                                        cloud_file_modified_time,
+                                        cloud_hash_check_sum,
+                                        _id
+                                    )
+                                );
+                            }
+                        }
+                    }
+                    // Certainly not our file
+                    else continue;
                 }
-                if (file_change["parents"][0] != cloud_file_info["cloud_parent_id"]) {
-                    nlohmann::json cloud_parent_info = db_conn->get_cloud_file_info(file_change["parents"][0], _id);
-                    if (!cloud_parent_info.empty()) {
-                        data["moved"] = true;
+                else {
+                    // Not NEW, we have db record
+                    global_id = file_link->global_id;
+                    // Deletion
+                    if (trashed) {
+                        if (_expected_events.check(cloud_file_id, ChangeType::Delete)) {
+                            LOG_DEBUG("GoogleDrive", "Expected DELETE: %s", change.dump().c_str());
+                            continue;
+                        }
+                        flags.add(ChangeType::Delete);
+                    }
+                    else {
+                        old_cloud_parent_id = file_link->cloud_parent_id;
+                        new_cloud_parent_id = cloud_parent_id;
+                        old_rel_path = _db->getPathByGlobalId(global_id);
+                        new_rel_path = old_rel_path;
+
+                        if (_expected_events.check(cloud_file_id, ChangeType::Move)) {
+                            LOG_DEBUG("GoogleDrive", "Expected MOVE: %s", change.dump().c_str());
+                            continue;
+                        }
+
+                        // Rename
+                        if (name != old_rel_path.filename()) {
+                            flags.add(ChangeType::Rename);
+                            new_rel_path = old_rel_path.parent_path() / name;
+                        }
+                        // Move
+                        if (old_cloud_parent_id != new_cloud_parent_id) {
+                            auto parent_link = _db->getFileByCloudIdAndCloudFileId(_id, new_cloud_parent_id);
+                            if (parent_link != nullptr) {
+                                flags.add(ChangeType::Move);
+                                auto parent_path = _db->getPathByGlobalId(parent_link->global_id);
+                                new_rel_path = parent_path / name;
+                            }
+                            // Move out => Deleteion
+                            else {
+                                flags.add(ChangeType::Delete);
+                            }
+                        }
+                        // Update
+                        if (type != EntryType::Directory) {
+                            auto stored_cloud_file_modified_time = file_link->cloud_file_modified_time;
+                            auto stored_cloud_hash_check_sum = get<std::string>(file_link->cloud_hash_check_sum);
+                            if (cloud_file_modified_time > stored_cloud_file_modified_time
+                                && size != file_link->size
+                                && cloud_hash_check_sum != stored_cloud_hash_check_sum)
+                            {
+                                flags.add(ChangeType::Update);
+                            }
+                        }
                     }
                 }
-            }                                                                                           // TODO same as before: if new parent is not ours
-            else if (file_change["parents"][0] != cloud_file_info["cloud_parent_id"]) {                 // check if its new or we moved file elsewhere
-                nlohmann::json cloud_parent_info = db_conn->get_cloud_file_info(file_change["parents"][0], _id);
-                if (!cloud_parent_info.empty()) {
-                    data["global_id"] = cloud_file_info["global_id"];
-                    data["tag"] = "CHANGED";
-                    data["moved"] = true;
-                    data["cloud_parent_id"] = file_change["parents"][0];
-                    data["name"] = file_change["name"];
+                std::unique_ptr<ICommand> first_cmd = nullptr;
+                if (flags.contains(ChangeType::New)) {
+                    first_cmd = std::make_unique<CloudDownloadCommand>(_id);
+                    first_cmd->setDTO(
+                        std::make_unique<FileRecordDTO>(
+                            type,
+                            cloud_parent_id,
+                            rel_path,
+                            cloud_file_id,
+                            size,
+                            cloud_file_modified_time,
+                            cloud_hash_check_sum,
+                            _id
+                        )
+                    );
                 }
-            }
-            else {
-                continue;
-            }
-            if (data["tag"] != "NULL") {
-                std::cout << file_change << '\n' << data << '\n';
-                file_change.clear();
-                change_template["data"] = data;
-                change_template["file"] = data["tag"] == "NEW" ?
-                    change_template["file"].get<std::string>()
-                    : std::to_string(cloud_file_info["global_id"].get<int>());
-                changes_vec.emplace_back(std::move(change_template));
-                change_template.clear();
+                else if (flags.contains(ChangeType::Delete)) {
+                    _pending_deletes.emplace(cloud_file_id,
+                        std::make_unique<FileDeletedDTO>(
+                            rel_path,
+                            global_id,
+                            _id,
+                            cloud_file_id,
+                            cloud_file_modified_time
+                        )
+                    );
+                }
+                else if (flags.contains(ChangeType::Rename) || flags.contains(ChangeType::Move) || flags.contains(ChangeType::Update)) {
+                    if (flags.contains(ChangeType::Update)) {
+                        first_cmd = std::make_unique<CloudDownloadCommand>(_id);
+                        first_cmd->setDTO(
+                            std::make_unique<FileModifiedDTO>(
+                                type,
+                                flags,
+                                global_id,
+                                _id,
+                                cloud_file_id,
+                                cloud_hash_check_sum,
+                                cloud_file_modified_time,
+                                old_rel_path,
+                                new_rel_path,
+                                old_cloud_parent_id,
+                                new_cloud_parent_id,
+                                size
+                            )
+                        );
+                    }
+                    else {
+                        first_cmd = std::make_unique<LocalUpdateCommand>(0);
+                        first_cmd->setDTO(
+                            std::make_unique<FileModifiedDTO>(
+                                type,
+                                flags,
+                                global_id,
+                                _id,
+                                cloud_file_id,
+                                cloud_hash_check_sum,
+                                cloud_file_modified_time,
+                                old_rel_path,
+                                new_rel_path,
+                                old_cloud_parent_id,
+                                new_cloud_parent_id,
+                                size
+                            )
+                        );
+                    }
+                }
+
+                if (first_cmd != nullptr) {
+                    changes.emplace_back(
+                        std::make_unique<Change>(
+                            flags,
+                            cloud_file_modified_time,
+                            std::move(first_cmd)
+                        )
+                    );
+                }
+
             }
         }
+        // TODO : check maybe_new if there is new folder with that file/folder
     }
-
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
-
-    std::vector<std::unique_ptr<ChangeDTO>> dummy;
-
-    return dummy;
+    return changes;
 }
 
-/* std::unique_ptr<CurlEasyHandle> GoogleDrive::create_file_download_handle(const std::string& id, const std::filesystem::path& path) {
-    std::unique_ptr<CurlEasyHandle> easy_handle = std::make_unique<CurlEasyHandle>();
-    if (!easy_handle->_curl) {
-        throw std::runtime_error("Error initializing curl create_file_download_handle");
-    }
-
-    std::string url = "https://www.googleapis.com/drive/v3/files/" + id + "?alt=media";
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, ("Authorization: Bearer " + _access_token).c_str());
-    easy_handle->_headers = headers;
-    easy_handle->type = "file_download";
-
-    easy_handle->_ofc = std::ofstream(path.parent_path().string() + "/-tmp-copy-cloudsync-" + path.filename().string(), std::ios::binary);
-    if (easy_handle->_ofc && easy_handle->_ofc.is_open()) {
-        curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &easy_handle->_ofc);
-    }
-    else {
-        throw std::runtime_error("Error opening file for upload create_file_download_handle: " + path.string());
-    }
-
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_VERBOSE, 0L);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_ACCEPT_ENCODING, "gzip, deflate");
-
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_HTTPHEADER, easy_handle->_headers);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_SSL_SESSIONID_CACHE, 1L);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_FOLLOWLOCATION, 1L);
-
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, write_data);
-
-    return std::move(easy_handle);
+bool GoogleDrive::hasChanges() const {
+    return !_events_buff.empty();
 }
+
+/* 
 
 std::unique_ptr<CurlEasyHandle> GoogleDrive::create_file_update_handle(const std::string& id, const std::filesystem::path& path, const std::string& name) {
     std::unique_ptr<CurlEasyHandle> easy_handle = std::make_unique<CurlEasyHandle>();
@@ -631,23 +763,14 @@ std::unique_ptr<CurlEasyHandle> GoogleDrive::create_file_update_handle(const std
     return std::move(easy_handle);
 } */
 
-std::string GoogleDrive::post_upload() {
-    get_start_page_token();
-    return std::move(_page_token);
-}
-
-const std::string& GoogleDrive::get_home_dir_id() const {
-    return _home_dir_id;
-}
-
 void GoogleDrive::proccesUpload(std::unique_ptr<FileRecordDTO>& dto, const std::string& response) const {
     auto json_rsp = nlohmann::json::parse(response);
-    dto->cloud_file_modified_time = convert_cloud_time(json_rsp["modifiedTime"]);
+    dto->cloud_file_modified_time = convertCloudTime(json_rsp["modifiedTime"]);
     dto->cloud_id = _id;
     dto->cloud_parent_id = json_rsp["parents"][0];
     dto->cloud_file_id = json_rsp["id"];
     if (json_rsp.contains("md5Checksum")) {
-        dto->cloud_hash_check_sum = json_rsp["md5Checksum"];
+        dto->cloud_hash_check_sum = json_rsp["md5Checksum"].get<std::string>();
     }
 }
 
@@ -656,6 +779,78 @@ void GoogleDrive::proccesDownload(std::unique_ptr<FileRecordDTO>& dto, const std
 void GoogleDrive::proccesDelete(std::unique_ptr<FileDeletedDTO>& dto, const std::string& response) const {}
 
 
-const int GoogleDrive::id() const {
+int GoogleDrive::id() const {
     return _id;
+}
+
+std::vector<std::unique_ptr<Change>> GoogleDrive::flushOldDeletes() {
+    LOG_DEBUG("GoogleDrive", "Flushing Deletes");
+    std::vector<std::unique_ptr<Change>> changes;
+    std::lock_guard<std::mutex> lk(_cleanup_mtx);
+    auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    auto it = _pending_deletes.begin();
+    while (it != _pending_deletes.end()) {
+        if (_expected_events.check(it->first, ChangeType::Delete)) {
+            LOG_DEBUG("LocalStorage", "Expected DELETE: %s", it->second->rel_path.string());
+            it = _pending_deletes.erase(it);
+            continue;
+        }
+        if ((now - it->second->when) > _UNDO_INTERVAL) {
+            LOG_DEBUG("LocalStorage", "Event: TRUE DELETE: %s", it->second->rel_path.string());
+            auto first_cmd = std::make_unique<CloudDeleteCommand>(_id);
+            first_cmd->setDTO(std::move(it->second));
+            changes.emplace_back(
+                std::make_unique<Change>(
+                    ChangeType::Delete,
+                    now,
+                    std::move(first_cmd)
+                )
+            );
+
+            it = _pending_deletes.erase(it);
+        }
+        else {
+            ++it;
+        }
+    }
+    _cleanup_cv.notify_all();
+    return changes;
+}
+
+bool GoogleDrive::ignoreTmp(const std::string& name) {
+    constexpr std::string_view tmp_prefix{ ".-tmp-cloudsync-" };
+    if (name.size() >= tmp_prefix.size()
+        && std::string_view(name).starts_with(tmp_prefix)) {
+        return true;
+    }
+    return false;
+}
+
+bool GoogleDrive::handleChangesResponse(const std::unique_ptr<RequestHandle>& handle, std::vector<std::string>& pages) {
+    auto changes = nlohmann::json::parse(handle->_response);
+    if (changes.contains("nextPageToken")) {
+        LOG_INFO("GoogleDrive", "Not all changes recieved, another request");
+        std::string page_token = changes["nextPageToken"];
+        std::string url = "https://www.googleapis.com/drive/v3/changes?"
+            "pageToken=" + page_token + "&fields=newStartPageToken%2CnextPageToken%2C"
+            "changes%28file%28id%2Ctrashed%2Cname%2CmodifiedTime%2CmimeType%2Cparents%29%29"
+            "&includeItemsFromAllDrives=false"
+            "&includeRemoved=false"
+            "&restrictToMyDrive=false"
+            "&supportsAllDrives=false";
+        curl_easy_setopt(handle->_curl, CURLOPT_URL, url.c_str());
+        return true;
+    }
+    else {
+        LOG_INFO("GoogleDrive", "All changes recieved");
+        _page_token = changes["newStartPageToken"];
+        pages.push_back(handle->_response);
+        _events_buff.push(pages);
+        _raw_signal->cv.notify_one();
+        return false;
+    }
+}
+
+std::string GoogleDrive::getHomeDir() const {
+    return _home_dir_id;
 }
