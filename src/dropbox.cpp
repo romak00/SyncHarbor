@@ -1,24 +1,7 @@
 #include "dropbox.h"
 #include "logger.h"
 #include "Networking.h"
-
-inline static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* output) {
-    size_t totalSize = size * nmemb;
-    output->append((char*)contents, totalSize);
-    return totalSize;
-}
-
-inline static size_t write_data(void* ptr, size_t size, size_t nmemb, void* userdata) {
-    std::ofstream* ofs = static_cast<std::ofstream*>(userdata);
-    ofs->write(static_cast<char*>(ptr), size * nmemb);
-    return size * nmemb;
-}
-
-inline static size_t ReadCallback(void* ptr, size_t size, size_t nmemb, void* stream) {
-    std::ifstream* file = static_cast<std::ifstream*>(stream);
-    file->read(static_cast<char*>(ptr), size * nmemb);
-    return file->gcount();
-}
+#include "change-factory.h"
 
 Dropbox::Dropbox(
     const std::string& client_id,
@@ -32,12 +15,14 @@ Dropbox::Dropbox(
     :
     _client_id(client_id),
     _client_secret(client_secret),
-    //_refresh_token(refresh_token),
+    _refresh_token(refresh_token),
     _home_path(home_path),
     _local_home_path(local_home_path),
     _db(db_conn),
     _id(cloud_id)
 {
+    this->refreshAccessToken();
+    this->ensureRootExists();
 }
 
 Dropbox::Dropbox(
@@ -80,71 +65,354 @@ Dropbox::Dropbox(
 {
 }
 
+bool Dropbox::isDropboxShortcutJsonFile(const std::filesystem::path& path) const {
+    static const std::unordered_set<std::string> shortcut_exts = {
+        ".gdoc", ".gsheet", ".gslide", ".gdraw", ".gform", ".gsite", ".jam", ".paper"
+    };
+
+    std::string ext = path.extension().string();
+
+    return shortcut_exts.contains(ext);
+}
+
 void Dropbox::setupUploadHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileRecordDTO>& dto) const {
-    if (!handle->_curl) {
-        throw std::runtime_error("Error initializing curl Google::UploadOperation");
-    }
 
     nlohmann::json j;
     j["path"] = _home_path.string() + "/" + dto->rel_path.string();
+    j["mode"] = "overwrite";
+    j["mute"] = true;
+    j["strict_conflict"] = false;
+
     handle->addHeaders("Authorization: Bearer " + _access_token);
 
-    if (dto->type == EntryType::File) {
-        j["mode"] = "overwrite";
-        handle->setFileStream((_local_home_path.string() + "/" + dto->rel_path.string()), std::ios::in);
-        std::string dropbox_api_arg = j.dump();
-        handle->addHeaders("Dropbox-API-Arg: " + dropbox_api_arg);
-        handle->addHeaders("Content-Type: application/octet-stream");
-        curl_easy_setopt(handle->_curl, CURLOPT_URL, "https://content.dropboxapi.com/2/files/upload");
+    std::string dropbox_api_arg = j.dump();
+    handle->addHeaders("Dropbox-API-Arg: " + dropbox_api_arg);
+    
+    if (dto->type == EntryType::Document && this->isDropboxShortcutJsonFile(dto->rel_path)) {
+        handle->addHeaders("Content-Type: application/json");
     }
     else {
-        j["autorename"] = false;
-        std::string body = j.dump();
-        handle->addHeaders("Content-Type: application/json");
-        curl_easy_setopt(handle->_curl, CURLOPT_URL, "https://api.dropboxapi.com/2/files/create_folder_v2");
-        curl_easy_setopt(handle->_curl, CURLOPT_POSTFIELDS, body.c_str());
-        curl_easy_setopt(handle->_curl, CURLOPT_POSTFIELDSIZE, body.size());
+        handle->addHeaders("Content-Type: application/octet-stream");
     }
+
+    handle->setFileStream((_local_home_path.string() + "/" + dto->rel_path.string()), std::ios::in);
+
+    curl_easy_setopt(handle->_curl, CURLOPT_URL, "https://content.dropboxapi.com/2/files/upload");
     curl_easy_setopt(handle->_curl, CURLOPT_POST, 1L);
 
     handle->setCommonCURLOpt();
 }
 
 void Dropbox::setupDownloadHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileRecordDTO>& dto) const {
-    std::string url = "https://content.dropboxapi.com/2/files/download";
+    std::string remote_path = (_home_path / dto->rel_path).string();
+    std::string url;
+
+    if (dto->type == EntryType::Document && this->isDropboxShortcutJsonFile(dto->rel_path)) {
+        url = "https://content.dropboxapi.com/2/files/export";
+    }
+    else {
+        url = "https://content.dropboxapi.com/2/files/download";
+    }
 
     handle->addHeaders("Authorization: Bearer " + _access_token);
-    handle->addHeaders("Dropbox-API-Arg: {\"path\": \"" + (_home_path / dto->rel_path).string() + "\"}");
+    handle->addHeaders("Dropbox-API-Arg: {\"path\": \"" + remote_path + "\"}");
 
-    auto path = _local_home_path / dto->rel_path;
-
-    handle->setFileStream(path, std::ios::out);
+    auto local_tmp_path = _local_home_path / dto->rel_path.parent_path() /
+        (".-tmp-cloudsync-" + dto->rel_path.filename().string());
 
     curl_easy_setopt(handle->_curl, CURLOPT_URL, url.c_str());
     handle->setCommonCURLOpt();
+    handle->setFileStream(local_tmp_path, std::ios::out);
 }
-void Dropbox::setupDownloadHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileModifiedDTO>& dto) const {
-    std::string url = "https://content.dropboxapi.com/2/files/download";
+
+void Dropbox::setupDownloadHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileUpdatedDTO>& dto) const {
+    std::string remote_path = (_home_path / dto->rel_path).string();
+    std::string url;
+
+    if (dto->type == EntryType::Document && this->isDropboxShortcutJsonFile(dto->rel_path)) {
+        url = "https://content.dropboxapi.com/2/files/export";
+    }
+    else {
+        url = "https://content.dropboxapi.com/2/files/download";
+    }
 
     handle->addHeaders("Authorization: Bearer " + _access_token);
-    handle->addHeaders("Dropbox-API-Arg: {\"path\": \"" + (_home_path / dto->new_rel_path).string() + "\"}");
+    handle->addHeaders("Dropbox-API-Arg: {\"path\": \"" + remote_path + "\"}");
 
-    auto path = _local_home_path / dto->new_rel_path.parent_path() / (".-tmp-cloudsync-" + dto->new_rel_path.filename().string());
-
-    handle->setFileStream(path, std::ios::out);
+    auto local_tmp_path = _local_home_path / dto->rel_path.parent_path() /
+        (".-tmp-cloudsync-" + dto->rel_path.filename().string());
 
     curl_easy_setopt(handle->_curl, CURLOPT_URL, url.c_str());
     handle->setCommonCURLOpt();
+    handle->setFileStream(local_tmp_path, std::ios::out);
 }
 
-bool Dropbox::isRealTime() const {
-    return true;
+void Dropbox::setupUpdateHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileUpdatedDTO>& dto) const {
+    std::filesystem::path file_path = _local_home_path / dto->rel_path;
+
+    std::string url = "https://content.dropboxapi.com/2/files/upload";
+    curl_easy_setopt(handle->_curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(handle->_curl, CURLOPT_POST, 1L);
+    
+    nlohmann::json j;
+    j["path"] = "/" + dto->rel_path.string();
+    j["mode"] = "overwrite";
+    j["mute"] = true;
+    j["strict_conflict"] = false;
+
+    std::string api_arg = j.dump();
+    
+    if (dto->type == EntryType::Document && this->isDropboxShortcutJsonFile(dto->rel_path)) {
+        handle->addHeaders("Content-Type: application/json");
+    }
+    else {
+        handle->addHeaders("Content-Type: application/octet-stream");
+    }
+
+    handle->addHeaders("Authorization: Bearer " + _access_token);
+    handle->addHeaders("Dropbox-API-Arg: " + api_arg);
+    
+    handle->setFileStream(file_path.string(), std::ios::in);
+    handle->setCommonCURLOpt();
 }
 
-void Dropbox::setupUpdateHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileModifiedDTO>& dto) const {}
-void Dropbox::setupDeleteHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileDeletedDTO>& dto) const {}
+void Dropbox::setupMoveHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileMovedDTO>& dto) const {
+    auto makeRemote = [this](const std::filesystem::path& rel) {
+        std::filesystem::path p = _home_path / rel;
+        std::string s = p.generic_string();
+        if (s.empty() || s[0] != '/')
+            s = "/" + s;
+        return s;
+        };
 
-std::vector<std::unique_ptr<Change>> Dropbox::initialFiles() { return {}; }
+    const std::string from_path = makeRemote(dto->old_rel_path);
+    const std::string to_path = makeRemote(dto->new_rel_path);
+
+    nlohmann::json body = {
+        {"from_path", from_path},
+        {"to_path",   to_path},
+        {"allow_shared_folder", true},
+        {"autorename", false},
+        {"allow_ownership_transfer", false}
+    };
+
+    std::string body_str = body.dump();
+
+    curl_easy_setopt(handle->_curl, CURLOPT_URL,
+        "https://api.dropboxapi.com/2/files/move_v2");
+    curl_easy_setopt(handle->_curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(handle->_curl, CURLOPT_POSTFIELDS, body_str.c_str());
+
+    handle->addHeaders("Authorization: Bearer " + _access_token);
+    handle->addHeaders("Content-Type: application/json");
+    handle->setCommonCURLOpt();
+}
+
+std::vector<std::unique_ptr<FileRecordDTO>> Dropbox::createPath(const std::filesystem::path& path, const std::filesystem::path& missing) {
+    std::vector<std::unique_ptr<FileRecordDTO>> created;
+
+    auto norm_path = normalizePath(path);
+
+    std::vector<std::filesystem::path> segs;
+    for (const auto& s : norm_path) {
+        segs.push_back(s);
+    }
+    int keep = int(segs.size() - std::distance(missing.begin(), missing.end()));
+    std::filesystem::path prefix;
+    for (int i = 0; i < keep; ++i) {
+        prefix /= segs[i];
+    }
+
+    auto handle = std::make_unique<RequestHandle>();
+    handle->addHeaders("Authorization: Bearer " + _access_token);
+    handle->addHeaders("Content-Type: application/json");
+    handle->setCommonCURLOpt();
+
+    std::filesystem::path accum = _home_path / prefix;
+
+    for (auto const& seg : missing) {
+        accum /= seg;
+        nlohmann::json cf_req = {
+            { "path",     accum.string() },
+            { "autorename", false }
+        };
+        std::string cf_body = cf_req.dump();
+
+        curl_easy_setopt(handle->_curl, CURLOPT_URL,
+            "https://api.dropboxapi.com/2/files/create_folder_v2");
+        curl_easy_setopt(handle->_curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(handle->_curl, CURLOPT_COPYPOSTFIELDS,
+            cf_body.c_str());
+        handle->_response.clear();
+
+        _expected_events.add(std::filesystem::relative(accum, _home_path), ChangeType::New);
+
+        HttpClient::get().syncRequest(handle);
+
+        nlohmann::json j = nlohmann::json::parse(handle->_response);
+
+        std::string folder_id;
+        if (j.contains("error_summary")) {
+            auto summary = j["error_summary"].get<std::string>();
+            if (summary.rfind("path/conflict/folder", 0) == 0) {
+                nlohmann::json md_req = {
+                    { "path", accum.string() }
+                };
+                std::string md_body = md_req.dump();
+
+                curl_easy_setopt(handle->_curl, CURLOPT_POST, 1L);
+                curl_easy_setopt(handle->_curl, CURLOPT_URL,
+                    "https://api.dropboxapi.com/2/files/get_metadata");
+                curl_easy_setopt(handle->_curl, CURLOPT_COPYPOSTFIELDS,
+                    md_body.c_str());
+                handle->_response.clear();
+
+                HttpClient::get().syncRequest(handle);
+                auto md = nlohmann::json::parse(handle->_response);
+                folder_id = md["id"].get<std::string>();
+            }
+            else {
+                throw std::runtime_error(
+                    "Dropbox create_folder_v2 error: " + summary
+                );
+            }
+        }
+        else {
+            auto meta = j["metadata"];
+            folder_id = meta["id"].get<std::string>();
+        }
+
+        auto dto = std::make_unique<FileRecordDTO>(
+            EntryType::Directory,
+            std::filesystem::relative(accum, _home_path),
+            folder_id,
+            0ULL,
+            0,
+            std::string{},
+            _id
+        );
+        created.push_back(std::move(dto));
+    }
+
+    return created;
+}
+
+void Dropbox::setupDeleteHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileDeletedDTO>& dto) const {
+    auto makeRemote = [this](const std::filesystem::path& rel) {
+        std::filesystem::path p = _home_path / rel;
+        std::string s = p.generic_string();
+        if (s.empty() || s[0] != '/')
+            s = "/" + s;
+        return s;
+        };
+
+    nlohmann::json body = {
+        {"path", makeRemote(dto->rel_path)}
+    };
+
+    std::string body_str = body.dump();
+
+    curl_easy_setopt(handle->_curl, CURLOPT_URL,
+        "https://api.dropboxapi.com/2/files/delete_v2");
+    curl_easy_setopt(handle->_curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(handle->_curl, CURLOPT_POSTFIELDS, body_str.c_str());
+
+    handle->addHeaders("Authorization: Bearer " + _access_token);
+    handle->addHeaders("Content-Type: application/json");
+    handle->setCommonCURLOpt();
+}
+
+std::vector<std::unique_ptr<FileRecordDTO>> Dropbox::initialFiles() {
+    LOG_INFO("Dropbox", "initialFiles() start for cloud_id=%d", _id);
+
+    std::vector<std::unique_ptr<FileRecordDTO>> result;
+
+    auto handle = std::make_unique<RequestHandle>();
+    curl_easy_setopt(handle->_curl, CURLOPT_POST, 1L);
+
+    curl_easy_setopt(handle->_curl,
+        CURLOPT_URL,
+        "https://api.dropboxapi.com/2/files/list_folder");
+
+    handle->addHeaders("Authorization: Bearer " + _access_token);
+    handle->addHeaders("Content-Type: application/json");
+
+    handle->setCommonCURLOpt();
+
+    nlohmann::json body = {
+        { "path",         _home_path },
+        { "recursive",    true },
+        { "include_media_info", false },
+        { "include_deleted",    false },
+        { "include_non_downloadable_files", true }
+    };
+    std::string body_str = body.dump();
+    curl_easy_setopt(handle->_curl, CURLOPT_COPYPOSTFIELDS, body_str.c_str());
+
+    HttpClient::get().syncRequest(handle);
+    auto rsp = nlohmann::json::parse(handle->_response);
+
+    auto process_entries = [&](const nlohmann::json& entries) {
+        for (auto& e : entries) {
+            bool is_folder = (e[".tag"] == "folder");
+            bool is_doc = !e.value("is_downloadable", true);
+            std::string id = e["id"].get<std::string>();
+            std::string path_str = e["path_display"].get<std::string>();
+
+            std::filesystem::path rel_path = std::filesystem::relative(path_str, _home_path);
+            if (rel_path.empty() || rel_path == std::filesystem::path(".")) {
+                continue;
+            }
+
+            LOG_DEBUG("Dropbox", "  Found %s id=%s path=%s",
+                is_folder ? "DIR" : "FILE",
+                id.c_str(),
+                path_str.c_str());
+
+            std::time_t mtime = is_folder ? 0 : convertCloudTime(e["server_modified"].get<std::string>());
+            std::string hash = is_folder ? "" : e["content_hash"].get<std::string>();
+            uint64_t size = is_folder ? 0ULL : e.value("size", 0ULL);
+
+            auto dto = std::make_unique<FileRecordDTO>(
+                is_folder ? EntryType::Directory : (is_doc ? EntryType::Document : EntryType::File),
+                rel_path,
+                id,
+                size,
+                mtime,
+                hash,
+                _id
+            );
+            result.push_back(std::move(dto));
+        }
+        };
+
+    process_entries(rsp["entries"]);
+
+    bool has_more = rsp.value("has_more", false);
+    std::string cursor = rsp.value("cursor", "");
+
+    while (has_more) {
+        nlohmann::json cont_body = { { "cursor", cursor } };
+        std::string cont_str = cont_body.dump();
+
+        curl_easy_setopt(handle->_curl, CURLOPT_URL,
+            "https://api.dropboxapi.com/2/files/list_folder/continue");
+        curl_easy_setopt(handle->_curl, CURLOPT_COPYPOSTFIELDS, cont_str.c_str());
+        handle->_response.clear();
+
+        HttpClient::get().syncRequest(handle);
+        auto cont_rsp = nlohmann::json::parse(handle->_response);
+
+        LOG_DEBUG("Dropbox", "continue response: %s", handle->_response.c_str());
+        process_entries(cont_rsp["entries"]);
+
+        has_more = cont_rsp.value("has_more", false);
+        cursor = cont_rsp.value("cursor", "");
+    }
+
+    LOG_INFO("Dropbox", "initialFiles() done, total entries = %zu", result.size());
+    return result;
+}
 
 int Dropbox::id() const {
     return _id;
@@ -180,179 +448,59 @@ void Dropbox::ensureRootExists() {
     HttpClient::get().syncRequest(handle);
 }
 
-void Dropbox::proccesUpdate(std::unique_ptr<FileModifiedDTO>& dto, const std::string& response) const {}
-void Dropbox::proccesDownload(std::unique_ptr<FileRecordDTO>& dto, const std::string& response) const {}
-void Dropbox::proccesDelete(std::unique_ptr<FileDeletedDTO>& dto, const std::string& response) const {}
-
-
-/* std::unique_ptr<CurlEasyHandle> Dropbox::create_file_upload_handle(const std::filesystem::path& path, const std::string& parent) {
-    std::unique_ptr<CurlEasyHandle> easy_handle = std::make_unique<CurlEasyHandle>();
-
-    std::string url = "https://content.dropboxapi.com/2/files/upload";
-
-    nlohmann::json j;
-    j["path"] = _home_dir_id + "/" + parent + "/" + path.filename().string();
-    j["mode"] = "overwrite";
-
-    std::string dropbox_api_arg = j.dump();
-
-    easy_handle->type = "file_upload";
-
-    easy_handle->_ifc = std::ifstream(path, std::ios::binary);
-    if (easy_handle->_ifc && easy_handle->_ifc.is_open()) {
-        curl_easy_setopt(easy_handle->_curl, CURLOPT_READDATA, &easy_handle->_ifc);
+void Dropbox::proccesUpload(std::unique_ptr<FileRecordDTO>& dto, const std::string& response) const {
+    auto json_response = nlohmann::json::parse(response);
+    if (dto->type == EntryType::Directory) {
+        dto->cloud_file_id = json_response["metadata"]["id"];
     }
     else {
-        throw std::runtime_error("Error opening file for upload create_file_download_handle: " + path.string());
+        dto->cloud_file_id = json_response["id"];
+        dto->cloud_file_modified_time = convertCloudTime(json_response["server_modified"]);
+        dto->cloud_hash_check_sum = json_response["content_hash"].get<std::string>();
     }
-
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, ("Authorization: Bearer " + _access_token).c_str());
-    headers = curl_slist_append(headers, "Content-Type: application/octet-stream");
-    headers = curl_slist_append(headers, ("Dropbox-API-Arg: " + dropbox_api_arg).c_str());
-    easy_handle->_headers = headers;
-
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_ACCEPT_ENCODING, "gzip, deflate");
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_HTTPHEADER, easy_handle->_headers);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_READFUNCTION, ReadCallback);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(easy_handle->_response));
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_SSL_SESSIONID_CACHE, 1L);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_FOLLOWLOCATION, 1L);
-
-    return std::move(easy_handle);
 }
 
-std::unique_ptr<CurlEasyHandle> Dropbox::create_dir_upload_handle(const std::filesystem::path& path, const std::string& parent) {
-    std::unique_ptr<CurlEasyHandle> easy_handle;
-    return std::move(easy_handle);
+void Dropbox::proccesUpdate(std::unique_ptr<FileUpdatedDTO>& dto, const std::string& response) const {
+    auto j = nlohmann::json::parse(response);
+
+    if (j.contains("metadata"))
+        j = j["metadata"];
+
+    dto->cloud_file_id = j.value("id", std::string{});
+
+    if (dto->type != EntryType::Directory && j.value(".tag", "") == "file")
+    {
+        dto->cloud_file_modified_time =
+            convertCloudTime(j["server_modified"].get<std::string>());
+
+        dto->cloud_hash_check_sum = j.value("content_hash", std::string{});
+        dto->size = j.value("size", 0LL);
+    }
 }
 
-std::unique_ptr<CurlEasyHandle> Dropbox::create_file_update_handle(const std::string& id, const std::filesystem::path& path, const std::string& name) {
-    std::unique_ptr<CurlEasyHandle> easy_handle = std::make_unique<CurlEasyHandle>();
-    if (!easy_handle->_curl) {
-        throw std::runtime_error("Error initializing curl create_file_update_handle");
+void Dropbox::proccesMove(std::unique_ptr<FileMovedDTO>& dto, const std::string& response) const {
+    auto j = nlohmann::json::parse(response);
+
+    if (!j.contains("metadata"))
+        return;
+
+    const auto& meta = j["metadata"];
+
+    if (dto->type == EntryType::Directory)
+        return;
+
+    if (meta.contains(".tag") &&
+        meta[".tag"] == "file" &&
+        meta.contains("server_modified"))
+    {
+        dto->cloud_file_modified_time =
+            convertCloudTime(meta["server_modified"].get<std::string>());
     }
-
-    std::string url = "https://content.dropboxapi.com/2/files/upload";
-    std::string dropbox_api_arg = "{\"path\": \"" + id + "\", \"mode\": \"overwrite\", \"autorename\": false, \"mute\": false}";
-
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, ("Authorization: Bearer " + _access_token).c_str());
-    headers = curl_slist_append(headers, "Content-Type: application/octet-stream");
-    headers = curl_slist_append(headers, ("Dropbox-API-Arg: " + dropbox_api_arg).c_str());
-    easy_handle->_headers = headers;
-
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_HTTPHEADER, easy_handle->_headers);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_READDATA, fopen(path.c_str(), "rb"));
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(easy_handle->_response));
-
-    return std::move(easy_handle);
 }
 
-std::unique_ptr<CurlEasyHandle> Dropbox::create_file_delete_handle(const std::string& id) {
-    std::unique_ptr<CurlEasyHandle> easy_handle = std::make_unique<CurlEasyHandle>();
-    if (!easy_handle->_curl) {
-        throw std::runtime_error("Error initializing curl create_file_delete_handle");
-    }
+void Dropbox::proccesDownload(std::unique_ptr<FileUpdatedDTO>& dto, const std::string& response) const {}
+void Dropbox::proccesDelete(std::unique_ptr<FileDeletedDTO>& dto, const std::string& response) const {}
 
-    std::string url = "https://api.dropboxapi.com/2/files/delete_v2";
-    std::string post_data = "{\"path\": \"" + id + "\"}";
-
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, ("Authorization: Bearer " + _access_token).c_str());
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    easy_handle->_headers = headers;
-
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_HTTPHEADER, easy_handle->_headers);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_POSTFIELDS, post_data.c_str());
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(easy_handle->_response));
-
-    return std::move(easy_handle);
-}
-
-std::unique_ptr<CurlEasyHandle> Dropbox::create_name_update_handle(const std::string& id, const std::string& name) {
-    std::unique_ptr<CurlEasyHandle> easy_handle = std::make_unique<CurlEasyHandle>();
-    if (!easy_handle->_curl) {
-        throw std::runtime_error("Error initializing curl create_name_update_handle");
-    }
-    std::string to = std::filesystem::path(id).parent_path().string() + "/" + name;
-
-    std::string url = "https://api.dropboxapi.com/2/files/move_v2";
-    nlohmann::json j;
-    j["from_path"] = id;
-    j["to_path"] = to;
-
-    std::string post_fields = j.dump();
-    easy_handle->type = "dropbox parent update";
-
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, ("Authorization: Bearer " + _access_token).c_str());
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    easy_handle->_headers = headers;
-
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_ACCEPT_ENCODING, "gzip, deflate");
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_HTTPHEADER, easy_handle->_headers);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_SSL_SESSIONID_CACHE, 1L);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_FOLLOWLOCATION, 1L);
-
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_COPYPOSTFIELDS, post_fields.c_str());
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(easy_handle->_response));
-
-    return std::move(easy_handle);
-}
-
-std::unique_ptr<CurlEasyHandle> Dropbox::create_parent_update_handle(const std::string& id, const std::string& parent, const std::string& parent_to_remove) {
-    std::unique_ptr<CurlEasyHandle> easy_handle = std::make_unique<CurlEasyHandle>();
-    if (!easy_handle->_curl) {
-        throw std::runtime_error("Error initializing curl create_parent_update_handle");
-    }
-    std::string to = parent, from = id;
-    if (!_dir_id_map.empty()) {
-        to = _dir_id_map[parent] + "/" + std::filesystem::path(id).filename().string();
-        from = _home_dir_id + "/" + std::filesystem::path(id).filename().string();
-    }
-    std::cout << "from: " << from << " to: " << to << '\n';
-    std::string url = "https://api.dropboxapi.com/2/files/move_v2";
-    nlohmann::json j;
-    j["from_path"] = from;
-    j["to_path"] = to;
-
-    std::string post_fields = j.dump();
-    easy_handle->type = "dropbox parent update";
-
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, ("Authorization: Bearer " + _access_token).c_str());
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    easy_handle->_headers = headers;
-
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_ACCEPT_ENCODING, "gzip, deflate");
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_HTTPHEADER, easy_handle->_headers);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_SSL_SESSIONID_CACHE, 1L);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_FOLLOWLOCATION, 1L);
-
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_COPYPOSTFIELDS, post_fields.c_str());
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-    curl_easy_setopt(easy_handle->_curl, CURLOPT_WRITEDATA, &(easy_handle->_response));
-
-    return std::move(easy_handle);
-} */
 
 std::string Dropbox::buildAuthURL(int local_port) const {
     std::string redirect = "http://localhost:" +
@@ -423,10 +571,8 @@ void Dropbox::proccessAuth(const std::string& response) {
     LOG_INFO("AUTH", "DropboxCloud with id: %i tokens updated, expires in %i", _id, expires_in);
 }
 
-void Dropbox::getDelta(const std::unique_ptr<RequestHandle>& handle) {
-    if (!handle->_curl) {
-        throw std::runtime_error("Error initializing curl Dropbox::getStartPageToken");
-    }
+std::string Dropbox::getDeltaToken() {
+    auto handle = std::make_unique<RequestHandle>();
 
     nlohmann::json j = {
         {"path", _home_path.string()},
@@ -447,25 +593,190 @@ void Dropbox::getDelta(const std::unique_ptr<RequestHandle>& handle) {
     curl_easy_setopt(handle->_curl, CURLOPT_POST, 1L);
 
     handle->setCommonCURLOpt();
-}
 
-void Dropbox::setDelta(const std::string& response) {
-    auto j = nlohmann::json::parse(response);
-    _page_token = j["cursor"];
+    HttpClient::get().syncRequest(handle);
+
+    auto jrsp = nlohmann::json::parse(handle->_response);
+    _page_token = jrsp["cursor"];
+
+    return _page_token;
 }
 
 std::string Dropbox::getHomeDir() const {
     return _home_path;
 }
 
-void Dropbox::proccesUpload(std::unique_ptr<FileRecordDTO>& dto, const std::string& response) const {
-    auto json_response = nlohmann::json::parse(response);
-    if (dto->type == EntryType::Directory) {
-        dto->cloud_file_id = json_response["metadata"]["id"];
+void Dropbox::getChanges() {
+    if (_page_token.empty()) {
+        getDeltaToken();
     }
-    else {
-        dto->cloud_file_id = json_response["id"];
-        dto->cloud_file_modified_time = convertCloudTime(json_response["server_modified"]);
-        dto->cloud_hash_check_sum = json_response["content_hash"].get<std::string>();
+
+    auto handle = std::make_unique<RequestHandle>();
+    std::vector<std::string> pages;
+    std::string cursor = _page_token;
+
+    nlohmann::json body_json = { {"cursor", cursor} };
+    std::string body = body_json.dump();
+
+    handle->addHeaders("Authorization: Bearer " + _access_token);
+    handle->addHeaders("Content-Type: application/json");
+    curl_easy_setopt(handle->_curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(handle->_curl, CURLOPT_URL,
+        "https://api.dropboxapi.com/2/files/list_folder/continue");
+    handle->setCommonCURLOpt();
+
+    bool has_more = false;
+    do {
+        curl_easy_setopt(handle->_curl, CURLOPT_POSTFIELDS, body.c_str());
+
+        HttpClient::get().syncRequest(handle);
+
+        pages.push_back(handle->_response);
+
+        auto j = nlohmann::json::parse(handle->_response);
+        has_more = j.value("has_more", false);
+        cursor = j.value("cursor", cursor);
+
+        if (has_more) {
+            body_json["cursor"] = cursor;
+            body = body_json.dump();
+        }
+    } while (has_more);
+
+    _page_token = cursor;
+    LOG_INFO("Dropbox", "All changes received");
+
+    bool any_entries = false;
+    for (const auto& raw : pages) {
+        auto j = nlohmann::json::parse(raw);
+        if (!j.value("entries", nlohmann::json::array()).empty()) {
+            any_entries = true;
+            break;
+        }
     }
+    if (any_entries) {
+        _events_buff.push(pages);
+        _raw_signal->cv.notify_one();
+    }
+}
+
+std::vector<std::unique_ptr<Change>> Dropbox::proccessChanges() {
+    std::vector<std::unique_ptr<Change>> changes;
+    std::vector<std::string> pages;
+
+    if (!_events_buff.try_pop(pages))
+        return changes;
+
+    for (const auto& raw : pages) {
+        auto j = nlohmann::json::parse(raw);
+        for (auto& entry : j.value("entries", nlohmann::json::array())) {
+            std::string tag = entry[".tag"].get<std::string>();
+            bool is_dir = (tag == "folder");
+            bool is_doc = !entry.value("is_downloadable", true);
+            std::string cloud_file_id = entry.value("id", std::string{});
+
+            std::string path = entry.value("path_display", std::string{});
+            if (!path.empty() && path.front() == '/')
+                path.erase(0, 1);
+            std::filesystem::path rel_path = path;
+
+            if (rel_path.empty() || rel_path == std::filesystem::path(".")) {
+                continue;
+            }
+
+            std::time_t mtime = 0;
+            uint64_t size     = 0;
+            std::string hash;
+
+            if (tag != "deleted" && !is_dir) {
+                mtime = convertCloudTime(entry.value("server_modified", std::string{}));
+                size  = entry.value("size", 0ULL);
+                hash  = entry.value("content_hash", std::string{});
+            }
+
+            EntryType type = is_dir ? EntryType::Directory : (is_doc ? EntryType::Document : EntryType::File);
+
+            auto link      = _db->getFileByCloudIdAndCloudFileId(_id, cloud_file_id);
+            int  global_id  = link ? link->global_id : 0;
+            auto old_path   = link ? _db->getPathByGlobalId(global_id) : std::filesystem::path{};
+            bool existed   = (link != nullptr);
+
+            bool need_new    = !existed && tag != "deleted";
+            bool need_del    =  existed && tag == "deleted";
+            bool need_move   =  existed && tag != "deleted" && rel_path != old_path;
+            bool need_update =  existed && !is_dir && tag != "deleted"
+                             && mtime > link->cloud_file_modified_time
+                             && hash != get<std::string>(link->cloud_hash_check_sum);
+
+            if (need_new && _expected_events.check(rel_path, ChangeType::New)) {
+                LOG_DEBUG("Dropbox", "Expected NEW: %s", raw.c_str());
+                continue;
+            }
+            if (need_del && _expected_events.check(rel_path, ChangeType::Delete)) {
+                LOG_DEBUG("Dropbox", "Expected DELETE: %s", raw.c_str());
+                continue;
+            }
+            if (need_move && _expected_events.check(rel_path, ChangeType::Move)) {
+                LOG_DEBUG("Dropbox", "Expected MOVE: %s", raw.c_str());
+                continue;
+            }
+            if (need_update && _expected_events.check(rel_path, ChangeType::Update)) {
+                LOG_DEBUG("Dropbox", "Expected UPDATE: %s", raw.c_str());
+                continue;
+            }
+
+            std::unique_ptr<Change> ch;
+            if (need_move && need_update) {
+                // MOVE
+                auto mDto = std::make_unique<FileMovedDTO>(
+                    type, global_id, _id, cloud_file_id,
+                    mtime, old_path, rel_path,
+                    /*oldParent=*/"", /*newParent=*/""
+                );
+                ch = ChangeFactory::makeCloudMove(std::move(mDto));
+
+                // UPDATE as dependent
+                auto uDto = std::make_unique<FileUpdatedDTO>(
+                    type, global_id, _id, cloud_file_id,
+                    hash, mtime, rel_path, /*newParent=*/"", size
+                );
+                auto updCh = ChangeFactory::makeCloudUpdate(std::move(uDto));
+                ch->addDependent(std::move(updCh));
+            }
+            else if (need_new) {
+                auto dto = std::make_unique<FileRecordDTO>(
+                    type, rel_path,
+                    cloud_file_id, size, mtime, hash, _id
+                );
+                ch = ChangeFactory::makeCloudNew(std::move(dto));
+            }
+            else if (need_del) {
+                auto dto = std::make_unique<FileDeletedDTO>(
+                    rel_path, global_id, _id, cloud_file_id, mtime
+                );
+                ch = ChangeFactory::makeDelete(std::move(dto));
+            }
+            else if (need_move) {
+                auto dto = std::make_unique<FileMovedDTO>(
+                    type, global_id, _id, cloud_file_id,
+                    mtime, old_path, rel_path,
+                    /*oldParent=*/"", /*newParent=*/""
+                );
+                ch = ChangeFactory::makeCloudMove(std::move(dto));
+            }
+            else if (need_update) {
+                auto dto = std::make_unique<FileUpdatedDTO>(
+                    type, global_id, _id, cloud_file_id,
+                    hash, mtime, rel_path, /*newParent=*/"", size
+                );
+                ch = ChangeFactory::makeCloudUpdate(std::move(dto));
+            }
+
+            if (ch) {
+                changes.emplace_back(std::move(ch));
+            }
+        }
+    }
+
+    return changes;
 }

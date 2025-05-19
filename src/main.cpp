@@ -173,7 +173,9 @@ int main(int argc, char* argv[]) {
 
     std::string mode = argv[1];
     std::string config_name;
-    if (argc >= 3) config_name = argv[2];
+    if (argc >= 3) {
+        config_name = argv[2];
+    }
 
     if (mode == "config") {
         if (config_name.empty()) {
@@ -207,6 +209,18 @@ int main(int argc, char* argv[]) {
         std::cout << ">> Running daemon for config: " << config_name << "\n";
         std::unique_ptr<SyncManager> sync_manager = std::make_unique<SyncManager>(db_file, SyncManager::Mode::Daemon);
         sync_manager->run();
+        return 0;
+    }
+    else if (mode == "config-file") {
+        if (config_name.empty()) {
+            std::cerr << "Usage: " << argv[0] << " config-file <cfg.json>\n";
+            return 1;
+        }
+        std::unique_ptr<SyncManager> sync_manager =
+            std::make_unique<SyncManager>(config_name, config_name + ".sqlite3", "/home/rk00/demo", SyncManager::Mode::InitialSync);
+
+        sync_manager->run();
+        sync_manager->shutdown();
         return 0;
     }
     else {

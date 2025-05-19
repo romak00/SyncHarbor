@@ -1,4 +1,4 @@
-/* 
+/*
     std::vector<CURLSH*> shared_handles;
 
     for (const auto& [cloud_id, cloud] : _clouds) {
@@ -62,7 +62,7 @@
     }
 
 
-                
+
 
                 void SyncHandler::sync() {
                     std::shared_ptr<Database> db_shared_conn = std::make_shared<Database>(_db_file_name);
@@ -112,7 +112,7 @@
                                         std::string parent_cloud_id = _db->get_cloud_file_id_by_cloud_id(_cloud_id, parent_global_id);
                                         std::unique_ptr<CurlEasyHandle> easy_handle = cloud->create_file_upload_handle(path, parent_cloud_id);
                                         easy_handle->_file_info.emplace(data["type"], global_id, _cloud_id, parent_cloud_id, "");
-                                        easy_handle->_file_info->info = "change";
+                                          easy_handle->_file_info->info = "change";
                                         curl_easy_setopt(easy_handle->_curl, CURLOPT_SHARE, shared_handles[_cloud_id - 1]);
                                         _files_curl_queue.emplace(std::move(easy_handle));
                                     }
@@ -237,7 +237,6 @@
 #include "sync-manager.h"
 
 
-
 SyncManager::SyncManager(
     const std::string& config_path,
     const std::string& db_file,
@@ -251,13 +250,10 @@ SyncManager::SyncManager(
     _should_exit(false)
 {
     _db = std::make_shared<Database>(_db_file);
+    _local_dir = local_dir;
     loadConfig();
 
     setRawSignal();
-
-    HttpClient::get().setClouds(_clouds);
-    CallbackDispatcher::get().setDB(_db_file);
-    CallbackDispatcher::get().setClouds(_clouds);
 }
 
 SyncManager::SyncManager(
@@ -272,7 +268,7 @@ SyncManager::SyncManager(
 }
 
 void SyncManager::run() {
-    
+
     if (_mode == Mode::InitialSync) {
         initialSync();
     }
@@ -298,7 +294,8 @@ void SyncManager::shutdown() {
 }
 
 void SyncManager::init() {
-    loadConfig();
+    _num_clouds = _clouds.size();
+
     setupClouds();
     setRawSignal();
 
@@ -315,6 +312,46 @@ void SyncManager::loadConfig() {
     nlohmann::json config_json;
     config_file >> config_json;
     _cloud_configs = config_json["clouds"];
+
+    for (const auto& cloud : _cloud_configs) {
+        std::string name = cloud["name"];
+        std::string type_str = cloud["type"];
+        CloudProviderType type = cloud_type_from_string(type_str);
+        nlohmann::json cloud_data = cloud["data"];
+        std::filesystem::path cloud_home_path(cloud_data["dir"]);
+        int cloud_id = _db->add_cloud(name, type, cloud_data);
+        if (type == CloudProviderType::GoogleDrive) {
+            _clouds.emplace(
+                cloud_id,
+                std::make_shared<GoogleDrive>(
+                    cloud_data["client_id"],
+                    cloud_data["client_secret"],
+                    cloud_data["refresh_token"],
+                    cloud_home_path,
+                    _local_dir,
+                    _db,
+                    cloud_id));
+            CloudResolver::registerCloud(cloud_id, "GoogleDrive");
+        }
+        else if (type == CloudProviderType::Dropbox) {
+            _clouds.emplace(
+                cloud_id,
+                std::make_shared<Dropbox>(
+                    cloud_data["client_id"],
+                    cloud_data["client_secret"],
+                    cloud_data["refresh_token"],
+                    cloud_home_path,
+                    _local_dir,
+                    _db,
+                    cloud_id));
+            CloudResolver::registerCloud(cloud_id, "Dropbox");
+        }
+    }
+
+    _num_clouds = _clouds.size();
+
+    _local = std::make_shared<LocalStorage>(_local_dir, 0, _db);
+    CloudResolver::registerCloud(0, "LocalStorage");
 }
 
 void SyncManager::loadDBConfig() {
@@ -364,8 +401,6 @@ void SyncManager::setupClouds() {
     }
 
     _local = std::make_shared<LocalStorage>(_local_dir, 0, _db);
-    _clouds.emplace(0, _local);
-    CloudResolver::registerCloud(0, "LocalStorage");
 }
 
 void SyncManager::setLocalDir(const std::string& path) {
@@ -446,62 +481,431 @@ std::vector<std::filesystem::path> SyncManager::checkLocalPermissions() const {
 }
 
 void SyncManager::changeFinished() {
-    
+
 }
 
 void SyncManager::initialSync() {
+    LOG_INFO("SyncManager", "Starting initialSync() with %i clouds", _clouds.size());
+    auto clouds = _clouds;
+    clouds.emplace(0, _local);
 
-    std::unordered_map<std::filesystem::path, std::unique_ptr<FileRecordDTO>> initial_files;
-    std::vector<std::unique_ptr<FileRecordDTO>> tmp_files;
-    for (auto& [cloud_id, cloud] : _clouds) {
-        tmp_files = cloud->initialFiles();
-        for (auto& file : tmp_files) {
-            auto& existing = initial_files[file->rel_path];
-            if (!existing || existing->cloud_file_modified_time < file->cloud_file_modified_time) {
-                existing.reset(file.release());
-            }
-        }
-    }
+    HttpClient::get().setClouds(clouds);
+    CallbackDispatcher::get().setDB(_db_file);
+    CallbackDispatcher::get().setClouds(clouds);
+
+    LOG_INFO("SyncManager", "Scanning local initialFiles()");
 
     std::unordered_map<std::filesystem::path, std::unique_ptr<FileRecordDTO>> local_files_map;
+    std::vector<std::unique_ptr<FileRecordDTO>> tmp_files;
     tmp_files = _local->initialFiles();
+    LOG_DEBUG("SyncManager", "LocalStorage returned %i items", tmp_files.size());
     for (auto& file : tmp_files) {
+        LOG_DEBUG("SyncManager", "  LOCAL: %s", file->rel_path.string().c_str());
+        int global_id = _db->add_file(*file);
+        file->global_id = global_id;
         local_files_map.emplace(file->rel_path, std::move(file));
     }
 
-    for (const auto& [path, cloud_dto] : initial_files) {
+    LOG_INFO("SyncManager", "Scanning clouds initialFiles()");
+    std::unordered_multimap<std::filesystem::path, std::unique_ptr<FileRecordDTO>> initial_files;
+    for (auto& [cloud_id, cloud] : _clouds) {
+        auto cloud_name = CloudResolver::getName(cloud_id);
+
+        LOG_INFO("SyncManager", "  Querying initialFiles() on cloud %s (id=%d)",
+            cloud_name.c_str(), cloud_id);
+
+        tmp_files = cloud->initialFiles();
+
+        LOG_DEBUG("SyncManager", "  Cloud %s returned %i items", cloud_name.c_str(), tmp_files.size());
+
+        for (auto& file : tmp_files) {
+
+            LOG_DEBUG("SyncManager", "    CLOUD: %s with file: %s",
+                cloud_name,
+                file->rel_path.string().c_str());
+
+            /* if (local_files_map.contains(file->rel_path)) {
+                file->global_id = local_files_map[file->rel_path]->global_id;
+                _db->add_file_link(*file);
+
+                LOG_DEBUG("SyncManager", "      linked to global_id=%i",
+                    file->global_id);
+            } */
+            auto rp = file->rel_path;
+            initial_files.emplace(
+                rp,
+                std::move(file)
+            );
+        }
+    }
+
+    LOG_INFO("SyncManager", "initialSync preparation done: local_files_map=%i, initial_files=%i",
+        local_files_map.size(), initial_files.size());
+
+    LOG_INFO("SyncManager", "Reconciling cloud vs local");
+    for (auto it = initial_files.begin(); it != initial_files.end();) {
+        auto range = initial_files.equal_range(it->first);
+        auto const& path = it->first;
+
+        LOG_DEBUG("SyncManager", "Processing path: %s (%i candidates)",
+            path.string().c_str(),
+            std::distance(range.first, range.second));
+
+        FileRecordDTO* best = nullptr;
+        for (auto itr = range.first; itr != range.second; ++itr) {
+            FileRecordDTO* dto = itr->second.get();
+            if (!best
+                || dto->cloud_file_modified_time > best->cloud_file_modified_time) {
+                best = dto;
+            }
+        }
+
+        LOG_DEBUG("SyncManager", "  Best cloud_id=%i mtime=%lli",
+            best->cloud_id,
+            static_cast<long long>(best->cloud_file_modified_time));
+
+
+        int cloud_id = best->cloud_id;
         if (!local_files_map.contains(path)) {
-            auto change = ChangeFactory::createInitial<
-                CloudDownloadNewCommand,
-                FileRecordDTO
-            >(
+
+            LOG_INFO("SyncManager", "  → NEW remote-only: %s", path.string().c_str());
+
+            auto change = std::make_unique<Change>(
                 ChangeType::New,
-                cloud_dto->cloud_file_modified_time,
-                cloud_dto->cloud_id,
-                [this](std::vector<std::unique_ptr<Change>>&& dependents) {
-                    SyncManager::changeFinished();
-                },
-                std::move(cloud_dto)
+                path,
+                std::time_t(nullptr),
+                cloud_id
+            );
+            std::unique_ptr<ICommand> first_cmd = nullptr;
+            int cmds_count = 0;
+            if (best->type == EntryType::Directory) {
+
+                LOG_DEBUG("SyncManager", "    Directory → LocalUploadCommand");
+
+                first_cmd = std::make_unique<LocalUploadCommand>(0);
+                auto dto_clone = std::make_unique<FileRecordDTO>(*best);
+                first_cmd->setDTO(std::move(dto_clone));
+                ChangeFactory::attachChangeCallbacks(change.get(), first_cmd.get());
+                change->setCmdChain(std::move(first_cmd));
+            }
+
+            else {
+
+                LOG_DEBUG("SyncManager", "    File → CloudDownloadNewCommand + LocalUploadCommand");
+
+                first_cmd = std::make_unique<CloudDownloadNewCommand>(cloud_id);
+                auto dto_clone = std::make_unique<FileRecordDTO>(*best);
+                first_cmd->setDTO(std::move(dto_clone));
+                ChangeFactory::attachChangeCallbacks(change.get(), first_cmd.get());
+                auto next_cmd = std::make_unique<LocalUploadCommand>(0);
+                ChangeFactory::attachChangeCallbacks(change.get(), next_cmd.get());
+                first_cmd->addNext(std::move(next_cmd));
+                change->setCmdChain(std::move(first_cmd));
+            }
+            handleChange(std::move(change));
+
+            local_files_map.emplace(path, std::make_unique<FileRecordDTO>(*best));
+        }
+        else if (std::filesystem::is_regular_file(_local_dir / path) && local_files_map[path]->cloud_file_modified_time < best->cloud_file_modified_time) {
+            auto change = std::make_unique<Change>(
+                ChangeType::Update,
+                path,
+                std::time_t(nullptr),
+                cloud_id
             );
 
+            LOG_INFO("SyncManager", "  → UPDATE remote-newer: %s", path.string().c_str());
+
+            auto first_cmd = std::make_unique<CloudDownloadUpdateCommand>(cloud_id);
+            ChangeFactory::attachChangeCallbacks(change.get(), first_cmd.get());
+
+            auto new_dto = std::make_unique<FileUpdatedDTO>(
+                best->type,
+                local_files_map[path]->global_id,
+                cloud_id,
+                best->cloud_file_id,
+                std::get<std::string>(best->cloud_hash_check_sum),
+                best->cloud_file_modified_time,
+                path,
+                best->cloud_parent_id,
+                best->size
+            );
+
+            first_cmd->setDTO(std::move(new_dto));
+            auto next_cmd = std::make_unique<LocalUpdateCommand>(0);
+            ChangeFactory::attachChangeCallbacks(change.get(), next_cmd.get());
+            first_cmd->addNext(std::move(next_cmd));
+            change->setCmdChain(std::move(first_cmd));
+
             handleChange(std::move(change));
+
+            best->global_id = local_files_map[path]->global_id;
+            local_files_map[path] = std::make_unique<FileRecordDTO>(*best);
         }
+
+        it = range.second;
     }
+
+    std::unordered_map<int, bool> ids;
+    for (const auto& [id, storage] : _clouds) {
+        ids.insert({ id, false });
+    }
+
+    HttpClient::get().waitUntilIdle();
+    CallbackDispatcher::get().waitUntilIdle();
+    HttpClient::get().waitUntilIdle();
+
+    LOG_INFO("SyncManager", "Pushing local variants to clouds");
 
     for (auto& [rel_path, local_dto] : local_files_map) {
-        if (!initial_files.count(rel_path)) {
+
+        if (local_dto->global_id == 0) {
+            local_dto->global_id = _db->getGlobalIdByPath(rel_path);
+        }
+
+        LOG_DEBUG("SyncManager", "Local path: %s", rel_path.string().c_str());
+
+        auto range = initial_files.equal_range(rel_path);
+
+        std::unordered_map<int, bool> have_it_or_not = ids;
+        for (auto itr = range.first; itr != range.second; ++itr) {
+            have_it_or_not[itr->second->cloud_id] = true;
+        }
+
+        if (std::filesystem::is_directory(rel_path)) {
+
+            LOG_DEBUG("SyncManager", "  Directory → uploading to missing clouds");
             
+            std::unique_ptr<Change> change = nullptr;
+            std::unique_ptr<ICommand> first_cmd  = nullptr;
+            int cmds_count = 0;
+            for (const auto& [cloud_id, have] : have_it_or_not) {
+                if (!have) {
+                    auto dto_clone = std::make_unique<FileRecordDTO>(*local_dto);
+                    first_cmd = std::make_unique<CloudUploadCommand>(cloud_id);
+                    change = std::make_unique<Change>(
+                        ChangeType::New,
+                        rel_path,
+                        std::time_t(nullptr),
+                        0
+                    );
+                    change->setCmdChain(std::move(first_cmd));
+                    break;
+                }
+            }
+            if (change) {
+                handleChange(std::move(change));
+            }
+        }
+        else {
+
+            LOG_DEBUG("SyncManager", "  File → upload/update to clouds");
+
+            auto change = std::make_unique<Change>(
+                ChangeType::New,
+                rel_path,
+                std::time_t(nullptr),
+                0
+            );
+            std::vector<std::unique_ptr<ICommand>> first_cmd = {};
+            int cmds_count = 0;
+
+            for (const auto& [cloud_id, have] : have_it_or_not) {
+                if (!have) {
+                    LOG_DEBUG("SyncManager", "Cloud: %s dont have file: %s", CloudResolver::getName(cloud_id), rel_path.c_str());
+                    auto dto_clone = std::make_unique<FileRecordDTO>(*local_dto);
+                    auto cmd = std::make_unique<CloudUploadCommand>(cloud_id);
+                    cmd->setDTO(std::move(dto_clone));
+                    ChangeFactory::attachChangeCallbacks(change.get(), cmd.get());
+                    first_cmd.push_back(std::move(cmd));
+                }
+
+                else {
+                    if (cloud_id == local_dto->cloud_id) {
+                        LOG_DEBUG("SyncManager", "Cloud: %s has best file: %s, dont upload here", CloudResolver::getName(cloud_id), rel_path.c_str());
+                        _db->add_file_link(*local_dto);
+                        continue;
+                    }
+                    FileRecordDTO* cloud_dto = nullptr;
+                    for (auto itr = range.first; itr != range.second; ++itr) {
+                        if (itr->second->cloud_id == cloud_id) {
+                            cloud_dto = itr->second.get();
+                        }
+                    }
+
+                    LOG_DEBUG("SyncManager", "Cloud: %s has old file: %s, upload here", CloudResolver::getName(cloud_id), rel_path.c_str());
+
+                    auto dto_clone = std::make_unique<FileUpdatedDTO>(
+                        local_dto->type,
+                        local_dto->global_id,
+                        cloud_dto->cloud_id,
+                        cloud_dto->cloud_file_id,
+                        std::get<std::string>(cloud_dto->cloud_hash_check_sum),
+                        local_dto->cloud_file_modified_time,
+                        rel_path,
+                        cloud_dto->cloud_parent_id,
+                        local_dto->size
+                    );
+
+                    cloud_dto->global_id = local_dto->global_id;
+                    _db->add_file_link(*cloud_dto);
+
+                    auto cmd = std::make_unique<CloudUpdateCommand>(cloud_id);
+                    cmd->setDTO(std::move(dto_clone));
+                    ChangeFactory::attachChangeCallbacks(change.get(), cmd.get());
+                    first_cmd.push_back(std::move(cmd));
+                    cmds_count++;
+                }
+            }
+            if (!first_cmd.empty()) {
+                change->setCmdChain(std::move(first_cmd));
+                handleChange(std::move(change));
+            }
+        }
+
+    }
+
+    LOG_INFO("SyncManager", "Waiting for all HTTP and callbacks to finish");
+
+    HttpClient::get().waitUntilIdle();
+
+    CallbackDispatcher::get().waitUntilIdle();
+
+    HttpClient::get().waitUntilIdle();
+
+    for (const auto& [cloud_id, cloud] : _clouds) {
+        nlohmann::json cloud_data = _db->get_cloud_config(cloud_id);
+        cloud_data["start_page_token"] = cloud->getDeltaToken();
+        _db->update_cloud_data(cloud_id, cloud_data);
+    }
+
+    _db->markInitialSyncDone();
+    LOG_INFO("SyncManager", "=== initialSync() complete ===");
+}
+
+void SyncManager::handleChange(std::unique_ptr<Change> incoming) {
+    auto path = incoming->getTargetPath();
+    auto type = incoming->getType();
+    auto entry_type = incoming->getTargetType();
+
+    LOG_INFO("SyncManager", "handleChange() called for path=%s",
+        path.string().c_str());
+
+    if (entry_type == EntryType::Directory && type == ChangeType::New) {
+        auto missing = _db->getMissingPathPart(path, _num_clouds);
+        if (!missing.empty()) {
+            LOG_DEBUG("SyncManager", "Missing parts found for directory: %s", missing.c_str());
+            createPath(path, missing);
+        }
+        return;
+    }
+
+    if (!_current_changes.contains(path)) {
+        if (type == ChangeType::New) {
+            auto missing = _db->getMissingPathPart(path.parent_path(), _num_clouds);
+            if (!missing.empty()) {
+                LOG_DEBUG("SyncManager", "Missing parent path: %s", missing.c_str());
+                createPath(path.parent_path(), missing);
+            }
+        }
+        LOG_DEBUG("SyncManager", "Starting new change for path: %s", path.c_str());
+        startChange(path, std::move(incoming));
+    }
+    else {
+        LOG_DEBUG("SyncManager", "Change already exists for path: %s", path.c_str());
+
+        if (_current_changes[path]->getCloudId() == incoming->getCloudId() &&
+            _current_changes[path]->getType() == ChangeType::Update && incoming->getType() == ChangeType::Move)
+        {
+            LOG_DEBUG("SyncManager", "Merging Move into existing Update change for path: %s", path.c_str());
+            _current_changes[path]->addDependent(std::move(incoming));
+        }
+        else if (_current_changes[path]->getType() == ChangeType::New && incoming->getType() == ChangeType::New) {
+            return;
+        }
+    }
+}
+
+void SyncManager::startChange(const std::filesystem::path& path, std::unique_ptr<Change> change) {
+    change->setOnComplete([this, path](auto&& deps) {
+        this->onChangeCompleted(path, std::move(deps));
+        });
+    _current_changes[path] = std::move(change);
+    _current_changes[path]->dispatch();
+}
+
+void SyncManager::onChangeCompleted(const std::filesystem::path& path,
+    std::vector<std::unique_ptr<Change>>&& dependents)
+{
+    LOG_INFO("SyncManager", "Change completed for path: %s", path.c_str());
+
+    std::unique_ptr<Change> life_holder;
+    if (auto it = _current_changes.find(path); it != _current_changes.end()) {
+        life_holder = std::move(it->second);
+        _current_changes.erase(it);
+    }
+
+    for (auto& dep : dependents) {
+        handleChange(std::move(dep));
+    }
+}
+
+void SyncManager::createPath(const std::filesystem::path& path, const std::filesystem::path& missing) {
+    LOG_INFO("SyncManager", "createPath() start for path=%s, missing=%s", path.string().c_str(), missing.string().c_str());
+
+    std::vector<std::unique_ptr<FileRecordDTO>> db_entry;
+    std::vector<std::unique_ptr<FileRecordDTO>> tmp;
+
+    LOG_DEBUG("SyncManager", "Creating local path...");
+
+    tmp = _local->createPath(path, missing);
+    db_entry.reserve(db_entry.size() + tmp.size());
+    db_entry.insert(
+        db_entry.end(),
+        std::make_move_iterator(tmp.begin()),
+        std::make_move_iterator(tmp.end())
+    );
+
+    CallbackDispatcher::get().syncDbWrite(db_entry);
+
+    LOG_DEBUG("SyncManager", "Wrote %i local entries to DB", db_entry.size());
+
+    std::unordered_map<std::filesystem::path, int> path_to_global_id;
+
+    for (const auto& e : db_entry) {
+        path_to_global_id.insert({ e->rel_path, e->global_id });
+        LOG_DEBUG("SyncManager", "Wrote %s with id %i", e->rel_path.c_str(), e->global_id);
+    }
+
+    db_entry.clear();
+
+    for (auto& [cloud_id, cloud] : _clouds) {
+        if (cloud_id != 0) {
+            LOG_INFO("SyncManager", "Creating path in %s", CloudResolver::getName(cloud_id));
+
+            tmp = cloud->createPath(path, missing);
+
+            for (auto& e : tmp) {
+                if (path_to_global_id.contains(e->rel_path)) {
+                    e->global_id = path_to_global_id[e->rel_path];
+                }
+                else {
+                    e->global_id = _db->getGlobalIdByPath(e->rel_path);
+                }
+                LOG_DEBUG("SyncManager", "Changed %s global id to %i", e->rel_path.c_str(), e->global_id);
+            }
+
+            db_entry.reserve(db_entry.size() + tmp.size());
+            db_entry.insert(
+                db_entry.end(),
+                std::make_move_iterator(tmp.begin()),
+                std::make_move_iterator(tmp.end())
+            );
         }
     }
 
-
-
-
-
-    _clouds.emplace(0, _local);
-    CloudResolver::registerCloud(0, "LocalStorage");
-
-    _db->markInitialSyncDone();
+    CallbackDispatcher::get().syncDbWrite(db_entry);
+    LOG_INFO("SyncManager", "createPath() complete. Total entries written: %i", db_entry.size());
 }
 
 void SyncManager::ensureRootsExist() {
@@ -542,7 +946,7 @@ void SyncManager::registerCloud(const std::string& cloud_name, const CloudProvid
     std::cout << "If not opened, click the link here:\n" << url << '\n';
     openUrl(url);
     std::string code = _http_server->waitForCode();
-    
+
     _clouds[cloud_id]->getRefreshToken(code, _http_server->getPort());
     _clouds[cloud_id]->ensureRootExists();
 
@@ -609,19 +1013,15 @@ void SyncManager::pollingLoop() {
 
         now = std::chrono::steady_clock::now();
 
-        if (now >= next_flush) {
-            for (auto& [id, cloud] : _clouds) {
-                _changes_buff.push(cloud->flushOldDeletes());
-            }
-            next_flush = now + std::chrono::seconds(8);
-        }
 
-        /* if (now >= next_poll) {
+        if (now >= next_poll) {
             for (auto& [id, cloud] : _clouds) {
-                HttpClient::get().submit();
+                if (id != 0) {
+                    cloud->getChanges();
+                }
             }
-            next_poll = now + std::chrono::seconds(60);
-        } */
+            next_poll = now + std::chrono::seconds(5);
+        }
 
         for (auto& [id, cloud] : _clouds) {
             if (cloud->hasChanges()) {
@@ -640,10 +1040,6 @@ bool SyncManager::anyStorageHasRaw() {
     return false;
 }
 
-
-void handleChange(std::unique_ptr<Change> change) {
-
-}
 
 void SyncManager::setRawSignal() {
     for (auto& cloud : _clouds) {

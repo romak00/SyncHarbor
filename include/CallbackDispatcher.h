@@ -11,6 +11,13 @@ public:
     void submit(std::unique_ptr<ICommand> command);
     void setDB(const std::string& db_file_name);
     void setClouds(const std::unordered_map<int, std::shared_ptr<BaseStorage>>& clouds);
+
+    bool isIdle() const noexcept;
+    void waitUntilIdle() const;
+
+    void syncDbWrite(const std::unique_ptr<FileRecordDTO>& dto);
+    void syncDbWrite(const std::vector<std::unique_ptr<FileRecordDTO>>& vec_dto);
+
 private:
     friend class HttpClient;
 
@@ -29,12 +36,15 @@ private:
 
     std::unordered_map<int, std::shared_ptr<BaseStorage>> _clouds;
 
-    std::atomic<bool> _should_stop{ false };
     ThreadSafeQueue<std::unique_ptr<ICommand>> _queue;
-
-    ActiveCount _active_count;
 
     std::unique_ptr<std::thread> _worker;
 
     std::unique_ptr<Database> _db;
+
+    std::atomic<bool> _should_stop{ false };
+
+    ActiveCount _active_count;
+
+    std::mutex _db_mutex;
 };

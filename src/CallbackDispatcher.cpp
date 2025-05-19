@@ -52,10 +52,47 @@ void CallbackDispatcher::worker() {
             command->getTarget(),
             CloudResolver::getName(command->getId())
         );
+        std::lock_guard lock(_db_mutex);
         command->completionCallback(_db, _clouds[cloud_id]);
         if (command->needRepeat()) {
             HttpClient::get().submit(std::move(command));
         }
         _active_count.decrement();
+    }
+}
+
+bool CallbackDispatcher::isIdle() const noexcept {
+    return _active_count.isIdle();
+}
+
+void CallbackDispatcher::waitUntilIdle() const {
+    _active_count.waitUntilIdle();
+}
+
+void CallbackDispatcher::syncDbWrite(const std::unique_ptr<FileRecordDTO>& dto) {
+    CallbackDispatcher::get().waitUntilIdle();
+    std::lock_guard lock(_db_mutex);
+
+    if (dto->cloud_id == 0) {
+        int global_id = _db->add_file(*dto);
+        dto->global_id = global_id;
+    }
+    else {
+        _db->add_file_link(*dto);
+    }
+}
+
+void CallbackDispatcher::syncDbWrite(const std::vector<std::unique_ptr<FileRecordDTO>>& vec_dto) {
+    CallbackDispatcher::get().waitUntilIdle();
+    std::lock_guard lock(_db_mutex);
+
+    for (auto& dto : vec_dto) {
+        if (dto->cloud_id == 0) {
+            int global_id = _db->add_file(*dto);
+            dto->global_id = global_id;
+        }
+        else {
+            _db->add_file_link(*dto);
+        }
     }
 }

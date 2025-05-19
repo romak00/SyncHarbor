@@ -4,3 +4,5 @@ build*
 mk.sh
 change.json
 *cloudsync*
+DatabaseTests
+LocalStorageTests

@@ -38,54 +38,35 @@ LocalStorage::~LocalStorage() noexcept {
     stopWatching();
 }
 
-void LocalStorage::proccesUpdate(std::unique_ptr<FileModifiedDTO>& dto, const std::string& response) const {
+void LocalStorage::proccesUpdate(std::unique_ptr<FileUpdatedDTO>& dto, const std::string& response) const {
     if (dto->cloud_id != 0) {
+        LOG_DEBUG(
+            "LOCAL STORAGE",
+            dto->rel_path.string(),
+            "trying to delete: %s",
+            (_local_home_dir.string() + "/" + dto->rel_path.string())
+        );
+        _expected_events.add(_local_home_dir / dto->rel_path, ChangeType::Delete);
+        std::filesystem::remove(_local_home_dir / dto->rel_path);
+        LOG_DEBUG(
+            "LOCAL STORAGE",
+            dto->rel_path.string(),
+            "trying to rename from %s to %s",
+            (_local_home_dir.string() + "/" + dto->rel_path.parent_path().string() + "/.-tmp-cloudsync-" + dto->rel_path.filename().string()),
+            _local_home_dir.string() + "/" + dto->rel_path.string()
+        );
+        std::filesystem::rename(
+            _local_home_dir.string() + "/" + dto->rel_path.parent_path().string() + "/.-tmp-cloudsync-" + dto->rel_path.filename().string(),
+            _local_home_dir / dto->rel_path
+        );
 
-        if (dto->change_flags.contains(ChangeType::Update)) {
-            LOG_DEBUG(
-                "LOCAL STORAGE",
-                dto->old_rel_path.string(),
-                "trying to delete: %s",
-                (_local_home_dir.string() + "/" + dto->old_rel_path.string())
-            );
-            _expected_events.add(_local_home_dir / dto->old_rel_path, ChangeType::Delete);
-            std::filesystem::remove(_local_home_dir / dto->old_rel_path);
-            LOG_DEBUG(
-                "LOCAL STORAGE",
-                dto->new_rel_path.string(),
-                "trying to rename from %s to %s",
-                (_local_home_dir.string() + "/" + dto->new_rel_path.parent_path().string() + "/.-tmp-cloudsync-" + dto->new_rel_path.filename().string()),
-                _local_home_dir.string() + "/" + dto->new_rel_path.string()
-            );
-            std::filesystem::rename(
-                _local_home_dir.string() + "/" + dto->new_rel_path.parent_path().string() + "/.-tmp-cloudsync-" + dto->new_rel_path.filename().string(),
-                _local_home_dir / dto->new_rel_path
-            );
+        _db->update_file_link(*dto);
 
-            std::filesystem::path full = _local_home_dir / dto->new_rel_path;
-            if (!std::filesystem::is_directory(full)) {
-                dto->file_id = this->getFileId(full);
-                dto->size = std::filesystem::file_size(full);
-                dto->cloud_hash_check_sum = this->computeFileHash(full);
-            }
-            dto->cloud_file_modified_time = convertSystemTime(full);
-        }
-        else if (dto->change_flags.contains(ChangeType::Move)) {
-            LOG_DEBUG(
-                "LOCAL STORAGE",
-                dto->old_rel_path.string(),
-                "trying to rename from %s to %s",
-                _local_home_dir.string() + "/" + dto->old_rel_path.string(),
-                _local_home_dir.string() + "/" + dto->new_rel_path.string()
-            );
-            _expected_events.add(_local_home_dir.string() / dto->old_rel_path, ChangeType::Move);
-            std::filesystem::rename(
-                _local_home_dir.string() + "/" + dto->old_rel_path.string(),
-                _local_home_dir.string() + "/" + dto->new_rel_path.string()
-            );
-            std::filesystem::path full = _local_home_dir.string() / dto->new_rel_path;
-            dto->cloud_file_modified_time = convertSystemTime(full);
-        }
+        std::filesystem::path full = _local_home_dir / dto->rel_path;
+        dto->file_id = this->getFileId(full);
+        dto->size = std::filesystem::file_size(full);
+        dto->cloud_hash_check_sum = this->computeFileHash(full);
+        dto->cloud_file_modified_time = convertSystemTime(full);
         dto->cloud_id = _id;
     }
 }
@@ -122,13 +103,50 @@ std::string LocalStorage::getHomeDir() const {
     return _local_home_dir;
 }
 
-void LocalStorage::onFsEvent(const wtr::event& e) {
-    std::cout << wtr::to<std::string>(e.effect_type) + ' '
-        + wtr::to<std::string>(e.path_type) + ' '
-        + wtr::to<std::string>(e.path_name)
-        + (e.associated ? " -> " + wtr::to<std::string>(e.associated->path_name) : "")
-        << std::endl;
+std::vector<std::unique_ptr<FileRecordDTO>> LocalStorage::createPath(const std::filesystem::path& path, const std::filesystem::path& missing) {
+    std::vector<std::unique_ptr<FileRecordDTO>> created;
 
+    auto norm_path = normalizePath(path);
+
+    std::vector<std::filesystem::path> segs;
+    for (const auto& s : norm_path) {
+        segs.push_back(s);
+    }
+    int keep = int(segs.size() - std::distance(missing.begin(), missing.end()));
+    std::filesystem::path prefix;
+    for (int i = 0; i < keep; ++i) {
+        prefix /= segs[i];
+    }
+
+    std::filesystem::path accum = _local_home_dir / prefix;
+
+    for (auto const& seg : missing) {
+        accum /= seg;
+
+        if (std::filesystem::create_directory(accum)) {
+            auto dto = std::make_unique<FileRecordDTO>(
+                EntryType::Directory,
+                std::filesystem::relative(accum, _local_home_dir),
+                0ULL,
+                convertSystemTime(accum),
+                0,
+                getFileId(accum)
+            );
+
+            _expected_events.add(std::filesystem::relative(accum, _local_home_dir), ChangeType::New);
+
+            created.push_back(std::move(dto));
+        }
+
+        else {
+            continue;
+        }
+    }
+
+    return created;
+}
+
+void LocalStorage::onFsEvent(const wtr::event& e) {
     if (e.path_type == wtr::event::path_type::watcher) {
         LOG_INFO("LocalStorage", "Watcher Event: %s", e.path_name.string());
         return;
@@ -180,40 +198,31 @@ void LocalStorage::onFsEvent(const wtr::event& e) {
     default:
         break;
     }
+
+    _raw_signal->cv.notify_one();
 }
 
 
 std::vector<std::unique_ptr<Change>> LocalStorage::proccessChanges() {
-    std::vector<std::unique_ptr<Change>> changes;
+    std::vector<std::unique_ptr<Change>> out;
+
     FileEvent evt;
     while (_events_buff.try_pop(evt)) {
-        LOG_DEBUG("LocalStorage", "events_buff size: %i", _events_buff.size());
         switch (evt.type) {
-        case ChangeType::Rename:
-            handleRenamed(evt);
-            break;
-
-        case ChangeType::New:
-            handleCreated(evt);
-            break;
-
-        case ChangeType::Delete:
-            handleDeleted(evt);
-            break;
-
-        case ChangeType::Update:
-            handleUpdated(evt);
-            break;
-
-        default:
-            break;
+        case ChangeType::New:    handleCreated(evt); break;
+        case ChangeType::Delete: handleDeleted(evt); break;
+        case ChangeType::Rename: handleRenamed(evt); break;
+        case ChangeType::Update: handleUpdated(evt); break;
+        default: break;
         }
     }
-    std::unique_ptr<Change> change;
-    while (_changes_queue.try_pop(change)) {
-        changes.emplace_back(std::move(change));
+
+    std::unique_ptr<Change> ch;
+    while (_changes_queue.try_pop(ch)) {
+        out.push_back(std::move(ch));
     }
-    return changes;
+
+    return out;
 }
 
 uint64_t LocalStorage::computeFileHash(const std::filesystem::path& path, uint64_t seed) const {
@@ -249,60 +258,92 @@ std::time_t LocalStorage::fromWatcherTime(const long long effect_ns) {
     return system_clock::to_time_t(tp_effect);
 }
 
-bool LocalStorage::isRealTime() const {
-    return true;
-}
-
 void LocalStorage::setRawSignal(std::shared_ptr<RawSignal> raw_signal) {
     _raw_signal = std::move(raw_signal);
 }
 
-std::vector<std::unique_ptr<Change>> LocalStorage::flushOldDeletes() {
-    LOG_DEBUG("LocalStorage", "Flushing Deletes");
-    std::vector<std::unique_ptr<Change>> changes;
-    std::lock_guard<std::mutex> lk(_cleanup_mtx);
-    auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    auto it = _pending_deletes.begin();
-    while (it != _pending_deletes.end()) {
-        const FileEvent& evt = it->second;
-        if (_expected_events.check(evt.path, ChangeType::Delete)) {
-            LOG_DEBUG("LocalStorage", "Expected DELETE: %s", evt.path.string());
-            it = _pending_deletes.erase(it);
-            continue;
-        }
-        std::time_t evt_time = fromWatcherTime(evt.when);
-        if ((now - evt.when) > _UNDO_INTERVAL) {
-            LOG_DEBUG("LocalStorage", "Event: TRUE DELETE: %s", evt.path.string());
-            auto rel_path = std::filesystem::relative(evt.path, _local_home_dir);
-            int global_id = _db->getGlobalIdByFileId(it->first);
-            changes.emplace_back(ChangeFactory::create<LocalDeleteCommand, FileDeletedDTO>(
-                ChangeType::New,
-                evt_time,
-                this->_id,
-                rel_path, global_id, evt_time
-            ));
+std::vector<std::unique_ptr<FileRecordDTO>> LocalStorage::initialFiles() {
+    std::vector<std::unique_ptr<FileRecordDTO>> result;
+    for (auto& entry : std::filesystem::recursive_directory_iterator(_local_home_dir)) {
+        const auto& p = entry.path();
+        auto rel_path = std::filesystem::relative(p, _local_home_dir);
+        bool is_dir = std::filesystem::is_directory(p);
+        bool is_doc = this->isDoc(p);
 
-            it = _pending_deletes.erase(it);
-        }
-        else {
-            ++it;
-        }
+        std::time_t mtime = convertSystemTime(p);
+        uint64_t    size = is_dir ? 0ULL
+            : std::filesystem::file_size(p);
+        uint64_t    hash = is_dir ? 0ULL
+            : computeFileHash(p);
+
+        uint64_t file_id = getFileId(p);
+
+        auto dto = std::make_unique<FileRecordDTO>(
+            is_dir ? EntryType::Directory : (is_doc ? EntryType::Document : EntryType::File),
+            rel_path,
+            size,
+            mtime,
+            hash,
+            file_id
+        );
+
+        result.push_back(std::move(dto));
     }
-    _cleanup_cv.notify_all();
-    return changes;
+    return result;
+}
+
+bool LocalStorage::isDoc(const std::filesystem::path& path) const {
+    static const std::unordered_set<std::string> exts = {
+        // Text Documents
+        ".doc", ".docx", ".odt", ".rtf", ".txt",
+
+        // Spreadsheets
+        ".xls", ".xlsx", ".ods", ".csv", ".tsv",
+
+        // Presentations
+        ".ppt", ".pptx", ".odp",
+
+        // Dropbox and other
+        ".gdoc", ".gsheet", ".gslide", ".gdraw", ".gform", ".gsite", ".jam", ".paper", ".url"
+    };
+
+    std::string ext = path.extension().string();
+
+    return exts.contains(ext);
 }
 
 void LocalStorage::handleDeleted(const FileEvent& evt) {
-    {
-        std::lock_guard<std::mutex> lk(_cleanup_mtx);
-        _pending_deletes.emplace(evt.file_id, evt);
+    if (_expected_events.check(evt.path, ChangeType::Delete)) {
+        LOG_DEBUG("LocalStorage", "Expected DELETE: %s", evt.path.string());
+        return;
     }
-    _cleanup_cv.notify_all();
+    if (ignoreTmp(evt.path)) {
+        LOG_DEBUG("LocalStorage", "Ignore tmp DELETE: %s", evt.path.string());
+        return;
+    }
+
+    auto full = _local_home_dir / evt.path;
+    auto rel = std::filesystem::relative(full, _local_home_dir);
+
+    int global_id = 0;
+    if (auto rec = _db->getFileByFileId(evt.file_id)) {
+        global_id = rec->global_id;
+    }
+
+    auto dto = std::make_unique<FileDeletedDTO>(
+        rel,
+        global_id,
+        evt.when
+    );
+    auto ch = ChangeFactory::makeDelete(std::move(dto));
+
+    _changes_queue.push(std::move(ch));
 }
 
 void LocalStorage::handleRenamed(const FileEvent& evt) {
-    if (evt.associated == nullptr) {
-        if (!std::filesystem::exists(evt.path)) {
+    if (!evt.associated) {
+        auto full = _local_home_dir / evt.path;
+        if (!std::filesystem::exists(full)) {
             handleDeleted(evt);
         }
         else {
@@ -310,30 +351,79 @@ void LocalStorage::handleRenamed(const FileEvent& evt) {
         }
     }
     else {
-        if (evt.path != evt.associated->path) {
-            handleMoved(evt);
-        }
+        handleMoved(evt);
     }
 }
 
 void LocalStorage::handleMoved(const FileEvent& evt) {
-    if (_expected_events.check(evt.path, ChangeType::Move)) {
-        LOG_DEBUG("LocalStorage", "Expected move: %s", evt.path.string());
+    if (ignoreTmp(evt.path)) {
+        LOG_DEBUG("LocalStorage", "Ignore tmp MOVE: %s", evt.path.string());
         return;
     }
-    std::unique_ptr<FileRecordDTO> dto = _db->getFileByFileId(evt.file_id);
-    auto new_rel_path = std::filesystem::relative(_local_home_dir, evt.path);
-    auto old_rel_path = std::filesystem::relative(_local_home_dir, evt.associated->path);
-    LOG_DEBUG("LocalStorage", "Trying to make move from %s to %s", evt.path.string(), evt.associated->path.string());
-    _changes_queue.push(ChangeFactory::create<LocalUpdateCommand, FileModifiedDTO>(
-        ChangeType::Move,
+    if (_expected_events.check(evt.path, ChangeType::Move)) {
+        LOG_DEBUG("LocalStorage", "Expected MOVE: %s", evt.path.string());
+        return;
+    }
+
+    auto full_new = _local_home_dir / evt.path;
+    auto full_old = _local_home_dir / evt.associated->path;
+    auto new_rel = std::filesystem::relative(full_new, _local_home_dir);
+    auto old_rel = std::filesystem::relative(full_old, _local_home_dir);
+
+    auto rec = _db->getFileByFileId(evt.file_id);
+    if (!rec) {
+        LOG_WARNING("LocalStorage", "Move of unknown file_id: %s", evt.path.string());
+        handleCreated(*evt.associated.get());
+        return;
+    }
+
+    auto dto = std::make_unique<FileMovedDTO>(
+        rec->type,
+        rec->global_id,
         evt.when,
-        this->_id,
-        dto->type, ChangeType::Move, dto->global_id, std::get<uint64_t>(dto->cloud_hash_check_sum), evt.when, old_rel_path, new_rel_path, dto->size, dto->file_id
-    ));
+        old_rel,
+        new_rel
+    );
+    auto ch = ChangeFactory::makeLocalMove(std::move(dto));
+    _changes_queue.push(std::move(ch));
 }
 
+void LocalStorage::proccesUpload(std::unique_ptr<FileRecordDTO>& dto, const std::string& response) const {
+    if (dto->cloud_id != 0) {
+        LOG_DEBUG(
+            "LOCAL STORAGE",
+            dto->rel_path.string(),
+            "trying to rename from %s to %s",
+            (_local_home_dir.string() + "/" + dto->rel_path.parent_path().string() + "/.-tmp-cloudsync-" + dto->rel_path.filename().string()),
+            _local_home_dir.string() + "/" + dto->rel_path.string()
+        );
+        std::filesystem::rename(
+            _local_home_dir.string() + "/" + dto->rel_path.parent_path().string() + "/.-tmp-cloudsync-" + dto->rel_path.filename().string(),
+            _local_home_dir / dto->rel_path
+        );
 
+        auto cloud_dto = std::make_unique<FileRecordDTO>(*dto);
+
+        std::filesystem::path full = _local_home_dir / dto->rel_path;
+        dto->file_id = this->getFileId(full);
+        dto->size = std::filesystem::file_size(full);
+        dto->cloud_hash_check_sum = this->computeFileHash(full);
+        dto->cloud_file_modified_time = convertSystemTime(full);
+        dto->cloud_id = _id;
+
+        int global_id = _db->add_file(*dto);
+        cloud_dto->global_id = global_id;
+        _db->add_file_link(*cloud_dto);
+    }
+    else {
+        dto->file_id = this->getFileId(_local_home_dir / dto->rel_path);
+        dto->cloud_hash_check_sum = this->computeFileHash(_local_home_dir / dto->rel_path);
+        dto->cloud_file_modified_time = convertSystemTime(_local_home_dir / dto->rel_path);
+
+        int global_id = _db->add_file(*dto);
+        dto->global_id = global_id;
+    }
+}
 
 void LocalStorage::handleCreated(const FileEvent& evt) {
     if (ignoreTmp(evt.path)) {
@@ -344,39 +434,23 @@ void LocalStorage::handleCreated(const FileEvent& evt) {
         LOG_DEBUG("LocalStorage", "Expected NEW: %s", evt.path.string());
         return;
     }
-    if (LocalStorage::checkUndo(evt)) {
-        LOG_DEBUG("LocalStorage", "Undo on DELETE: %s", evt.path.string());
-        return;
-    }
-    auto rel_path = std::filesystem::relative(_local_home_dir, evt.path);
-    EntryType type;
-    uint64_t cloud_hash_check_sum = 0;
-    uint64_t size = 0;
-    if (std::filesystem::is_directory(evt.path)) {
-        type = EntryType::Directory;
-    }
-    else {
-        cloud_hash_check_sum = LocalStorage::computeFileHash(evt.path);
-        size = std::filesystem::file_size(evt.path);
-        type = EntryType::File;
-    }
-    LOG_DEBUG("LocalStorage", "Trying to do NEW: %s", evt.path.string());
-    _changes_queue.push(ChangeFactory::create<LocalUploadCommand, FileRecordDTO>(
-        ChangeType::New,
-        evt.when,
-        this->_id,
-        type, rel_path, size, evt.when, cloud_hash_check_sum, evt.file_id
-    ));
-}
 
-bool LocalStorage::checkUndo(const FileEvent& evt) {
-    std::lock_guard<std::mutex> lk(_cleanup_mtx);
-    if (_pending_deletes.contains(evt.file_id) && _pending_deletes[evt.file_id].path == evt.path) {
-        LOG_DEBUG("LocalStorage", "Undo check done: %s", evt.path.string());
-        _pending_deletes.erase(evt.file_id);
-        return true;
-    }
-    return false;
+    auto full = _local_home_dir / evt.path;
+    auto rel = std::filesystem::relative(full, _local_home_dir);
+    EntryType t = std::filesystem::is_directory(full) ? EntryType::Directory : (this->isDoc(full) ? EntryType::Document : EntryType::File);
+    uint64_t hash = t != EntryType::Directory ? computeFileHash(full) : 0;
+    uint64_t sz = t != EntryType::Directory ? std::filesystem::file_size(full) : 0;
+
+    auto dto = std::make_unique<FileRecordDTO>(
+        t,
+        rel,
+        sz,
+        evt.when,
+        hash,
+        evt.file_id
+    );
+    auto ch = ChangeFactory::makeLocalNew(std::move(dto));
+    _changes_queue.push(std::move(ch));
 }
 
 void LocalStorage::handleUpdated(const FileEvent& evt) {
@@ -384,17 +458,31 @@ void LocalStorage::handleUpdated(const FileEvent& evt) {
         LOG_DEBUG("LocalStorage", "Ignore tmp UPDATE: %s", evt.path.string());
         return;
     }
-    std::unique_ptr<FileRecordDTO> dto = _db->getFileByFileId(evt.file_id);
-    uint64_t local_hash = computeFileHash(evt.path);
-    uint64_t size = std::filesystem::file_size(evt.path);
-    LOG_DEBUG("LocalStorage", "Trying to do UPDATE: %s", evt.path.string());
-    std::time_t evt_time = fromWatcherTime(evt.when);
-    _changes_queue.push(ChangeFactory::create<LocalUpdateCommand, FileModifiedDTO>(
-        ChangeType::Update,
-        evt_time,
-        this->_id,
-        dto->type, ChangeType::Update, dto->global_id, local_hash, evt_time, dto->rel_path, dto->rel_path, size, dto->file_id
-    ));
+
+    auto full = _local_home_dir / evt.path;
+    auto rel = std::filesystem::relative(full, _local_home_dir);
+
+    auto rec = _db->getFileByFileId(evt.file_id);
+    if (!rec) {
+        LOG_WARNING("LocalStorage", "Update of unknown file_id: %s", evt.path.string());
+        return;
+    }
+
+    uint64_t hash = computeFileHash(full);
+    uint64_t sz = std::filesystem::file_size(full);
+    std::time_t tm = fromWatcherTime(evt.when);
+
+    auto dto = std::make_unique<FileUpdatedDTO>(
+        rec->type,
+        rec->global_id,
+        hash,
+        tm,
+        rel,
+        sz,
+        evt.file_id    
+    );
+    auto ch = ChangeFactory::makeLocalUpdate(std::move(dto));
+    _changes_queue.push(std::move(ch));
 }
 
 bool LocalStorage::hasChanges() const {

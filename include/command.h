@@ -13,22 +13,41 @@ public:
     virtual void completionCallback(const std::unique_ptr<Database>& db, const std::shared_ptr<BaseStorage>& cloud) = 0;
     virtual void continueChain() = 0;
     virtual void setDTO(std::unique_ptr<FileRecordDTO> dto) {}
-    virtual void setDTO(std::unique_ptr<FileModifiedDTO> dto) {}
+    virtual void setDTO(std::unique_ptr<FileUpdatedDTO> dto) {}
     virtual void setDTO(std::unique_ptr<FileDeletedDTO> dto) {}
+    virtual void setDTO(std::unique_ptr<FileMovedDTO> dto) {}
+    virtual void addNext(std::unique_ptr<ICommand> next_command) = 0;
     virtual RequestHandle& getHandle() {
         static RequestHandle dummy;
         return dummy;
     }
-    virtual const std::string getTarget() const = 0;
+    virtual std::string getTarget() const = 0;
+    virtual EntryType getTargetType() const {
+        return EntryType::Null;
+    }
     virtual int getId() const = 0;
     virtual bool needRepeat() const {
         return false;
     }
+
+    void setChangeCallbacks(std::function<void()> on_created_cb, std::function<void()> on_finished_cb, std::function<void()> on_failed_cb) {
+        on_created_cb();
+        _onFinished = std::move(on_finished_cb);
+        _onFailed = std::move(on_failed_cb);
+    }
+
+protected:
+    void notifyFinished() noexcept { if (_onFinished) _onFinished(); }
+    void notifyFailed()   noexcept { if (_onFailed)   _onFailed(); }
+
+private:
+    std::function<void()> _onFinished;
+    std::function<void()> _onFailed;
 };
 
 class ChainedCommand : public ICommand {
 public:
-    void addNext(std::unique_ptr<ICommand> next_command) {
+    void addNext(std::unique_ptr<ICommand> next_command) override {
         _next_commands.emplace_back(std::move(next_command));
     }
     int getId() const override {
@@ -75,23 +94,25 @@ public:
     }
 
     void completionCallback(const std::unique_ptr<Database>& db, const std::shared_ptr<BaseStorage>& cloud) override {
-        int global_id = db->add_file(*_dto);
-        _dto->global_id = global_id;
-        if (_dto->cloud_id != 0) {
-            db->add_file_link(*_dto);
-        }
+        cloud->proccesUpload(_dto, "");
         for (auto& next_command : _next_commands) {
             next_command->setDTO(std::make_unique<FileRecordDTO>(*_dto));
         }
         LOG_INFO("LOCAL UPLOAD", this->getTarget(), "completed");
+
+        notifyFinished();
         continueChain();
     }
     void setDTO(std::unique_ptr<FileRecordDTO> dto) override {
         _dto = std::move(dto);
     }
 
-    const std::string getTarget() const override {
+    std::string getTarget() const override {
         return _dto->rel_path.string();
+    }
+
+    EntryType getTargetType() const override {
+        return _dto->type;
     }
 
 private:
@@ -114,25 +135,78 @@ public:
     void execute(const std::shared_ptr<BaseStorage>& cloud) override {}
 
     void completionCallback(const std::unique_ptr<Database>& db, const std::shared_ptr<BaseStorage>& cloud) override {
+        LOG_INFO("LOCAL UPDATE", this->getTarget(), "started");
+
         cloud->proccesUpdate(_dto, "");
         db->update_file(*_dto);
 
         for (auto& next_command : _next_commands) {
-            next_command->setDTO(std::make_unique<FileModifiedDTO>(*_dto));
+            next_command->setDTO(std::make_unique<FileUpdatedDTO>(*_dto));
         }
         LOG_INFO("LOCAL UPDATE", this->getTarget(), "completed");
+
+        notifyFinished();
         continueChain();
     }
-    void setDTO(std::unique_ptr<FileModifiedDTO> dto) override {
+    void setDTO(std::unique_ptr<FileUpdatedDTO> dto) override {
         _dto = std::move(dto);
     }
 
-    const std::string getTarget() const override {
-        return _dto->new_rel_path.string();
+    std::string getTarget() const override {
+        return _dto->rel_path.string();
+    }
+
+    EntryType getTargetType() const override {
+        return _dto->type;
     }
 
 private:
-    std::unique_ptr<FileModifiedDTO> _dto;
+    std::unique_ptr<FileUpdatedDTO> _dto;
+};
+
+class LocalMoveCommand : public LocalCommand {
+public:
+    LocalMoveCommand(const int cloud_id) {
+        _cloud_id = cloud_id;
+    }
+
+    ~LocalMoveCommand() = default;
+    LocalMoveCommand(const LocalMoveCommand&) = delete;
+    LocalMoveCommand& operator=(const LocalMoveCommand&) = delete;
+
+    LocalMoveCommand(LocalMoveCommand&&) noexcept = default;
+    LocalMoveCommand& operator=(LocalMoveCommand&&) noexcept = default;
+
+    void execute(const std::shared_ptr<BaseStorage>& cloud) override {}
+
+    void completionCallback(const std::unique_ptr<Database>& db, const std::shared_ptr<BaseStorage>& cloud) override {
+        LOG_INFO("LOCAL UPDATE", this->getTarget(), "started");
+
+        cloud->proccesMove(_dto, "");
+        db->update_file(*_dto);
+
+        for (auto& next_command : _next_commands) {
+            next_command->setDTO(std::make_unique<FileMovedDTO>(*_dto));
+        }
+        LOG_INFO("LOCAL UPDATE", this->getTarget(), "completed");
+
+        notifyFinished();
+        continueChain();
+    }
+    void setDTO(std::unique_ptr<FileMovedDTO> dto) override {
+        _dto = std::move(dto);
+    }
+
+    std::string getTarget() const override {
+        return _dto->old_rel_path.string();
+    }
+
+    EntryType getTargetType() const override {
+        return _dto->type;
+    }
+
+private:
+    std::unique_ptr<FileMovedDTO> _dto;
 };
 
 class LocalDeleteCommand : public LocalCommand {
@@ -167,6 +241,8 @@ public:
         }
         db->delete_file_and_links(_dto->global_id);
         LOG_INFO("LOCAL DELETE", this->getTarget(), "completed");
+
+        notifyFinished();
         continueChain();
     }
 
@@ -174,7 +250,7 @@ public:
         _dto = std::move(dto);
     }
 
-    const std::string getTarget() const override {
+    std::string getTarget() const override {
         return _dto->rel_path.string();
     }
 
@@ -207,6 +283,11 @@ public:
         cloud->proccesUpload(_dto, _handle->_response);
         db->add_file_link(*_dto);
         LOG_INFO("CLOUD UPLOAD", "Completed for entry: %s on: %s", this->getTarget(), CloudResolver::getName(_cloud_id));
+        for (auto& next_command : _next_commands) {
+            next_command->setDTO(std::make_unique<FileRecordDTO>(*_dto));
+        }
+
+        notifyFinished();
         continueChain();
     }
 
@@ -218,8 +299,12 @@ public:
         return *_handle;
     }
 
-    const std::string getTarget() const override {
+    std::string getTarget() const override {
         return _dto->rel_path.string();
+    }
+
+    EntryType getTargetType() const override {
+        return _dto->type;
     }
 
 private:
@@ -241,24 +326,98 @@ public:
     CloudUpdateCommand& operator=(CloudUpdateCommand&&) noexcept = default;
 
     void execute(const std::shared_ptr<BaseStorage>& cloud) override {
+        _dto->cloud_id = _cloud_id;
+        _handle = std::make_unique<RequestHandle>();
+        cloud->setupUpdateHandle(_handle, _dto);
 
+        LOG_INFO("CLOUD UPDATE", "Started for entry: %s on: %s", this->getTarget(), CloudResolver::getName(_cloud_id));
     }
 
     void completionCallback(const std::unique_ptr<Database>& db, const std::shared_ptr<BaseStorage>& cloud) override {
+        cloud->proccesUpdate(_dto, _handle->_response);
+        db->update_file_link(*_dto);
+        LOG_INFO("CLOUD UPDATE", "Completed for entry: %s on: %s", this->getTarget(), CloudResolver::getName(_cloud_id));
+        for (auto& next_command : _next_commands) {
+            next_command->setDTO(std::make_unique<FileUpdatedDTO>(*_dto));
+        }
 
+        notifyFinished();
+        continueChain();
     }
 
     RequestHandle& getHandle() override {
         return *_handle;
     }
 
-    const std::string getTarget() const override {
-        return _dto->new_rel_path.filename().string();
+    void setDTO(std::unique_ptr<FileUpdatedDTO> dto) override {
+        _dto = std::move(dto);
+    }
+
+    std::string getTarget() const override {
+        return _dto->rel_path.filename().string();
+    }
+
+    EntryType getTargetType() const override {
+        return _dto->type;
     }
 
 private:
     std::unique_ptr<RequestHandle> _handle;
-    std::unique_ptr<FileModifiedDTO> _dto;
+    std::unique_ptr<FileUpdatedDTO> _dto;
+};
+
+class CloudMoveCommand : public CloudCommand {
+public:
+    CloudMoveCommand(const int cloud_id) {
+        _cloud_id = cloud_id;
+    }
+
+    ~CloudMoveCommand() = default;
+    CloudMoveCommand(const CloudMoveCommand&) = delete;
+    CloudMoveCommand& operator=(const CloudMoveCommand&) = delete;
+
+    CloudMoveCommand(CloudMoveCommand&&) noexcept = default;
+    CloudMoveCommand& operator=(CloudMoveCommand&&) noexcept = default;
+
+    void execute(const std::shared_ptr<BaseStorage>& cloud) override {
+        _dto->cloud_id = _cloud_id;
+        _handle = std::make_unique<RequestHandle>();
+        cloud->setupMoveHandle(_handle, _dto);
+
+        LOG_INFO("CLOUD UPDATE", "Started for entry: %s on: %s", this->getTarget(), CloudResolver::getName(_cloud_id));
+    }
+
+    void completionCallback(const std::unique_ptr<Database>& db, const std::shared_ptr<BaseStorage>& cloud) override {
+        cloud->proccesMove(_dto, _handle->_response);
+        db->update_file_link(*_dto);
+        LOG_INFO("CLOUD UPDATE", "Completed for entry: %s on: %s", this->getTarget(), CloudResolver::getName(_cloud_id));
+        for (auto& next_command : _next_commands) {
+            next_command->setDTO(std::make_unique<FileMovedDTO>(*_dto));
+        }
+
+        notifyFinished();
+        continueChain();
+    }
+
+    RequestHandle& getHandle() override {
+        return *_handle;
+    }
+
+    void setDTO(std::unique_ptr<FileMovedDTO> dto) override {
+        _dto = std::move(dto);
+    }
+
+    std::string getTarget() const override {
+        return _dto->old_rel_path.filename().string();
+    }
+
+    EntryType getTargetType() const override {
+        return _dto->type;
+    }
+
+private:
+    std::unique_ptr<RequestHandle> _handle;
+    std::unique_ptr<FileMovedDTO> _dto;
 };
 
 class CloudDownloadNewCommand : public CloudCommand {
@@ -275,6 +434,7 @@ public:
     CloudDownloadNewCommand& operator=(CloudDownloadNewCommand&&) noexcept = default;
 
     void execute(const std::shared_ptr<BaseStorage>& cloud) override {
+        LOG_INFO("CLOUD DOWNLOAD", "New file download started: %s", _dto->rel_path.string().c_str());
         _dto->cloud_id = _cloud_id;
         _handle = std::make_unique<RequestHandle>();
         cloud->setupDownloadHandle(_handle, _dto);
@@ -282,6 +442,11 @@ public:
 
     void completionCallback(const std::unique_ptr<Database>& db, const std::shared_ptr<BaseStorage>& cloud) override {
         LOG_INFO("CLOUD DOWNLOAD", "New file downloaded: %s", _dto->rel_path.string().c_str());
+        for (auto& next_command : _next_commands) {
+            next_command->setDTO(std::make_unique<FileRecordDTO>(*_dto));
+        }
+
+        notifyFinished();
         continueChain();
     }
 
@@ -289,8 +454,16 @@ public:
         return *_handle;
     }
 
-    const std::string getTarget() const override {
+    void setDTO(std::unique_ptr<FileRecordDTO> dto) override {
+        _dto = std::move(dto);
+    }
+
+    std::string getTarget() const override {
         return _dto->rel_path.filename().string();
+    }
+
+    EntryType getTargetType() const override {
+        return _dto->type;
     }
 
 private:
@@ -312,6 +485,7 @@ public:
     CloudDownloadUpdateCommand& operator=(CloudDownloadUpdateCommand&&) noexcept = default;
 
     void execute(const std::shared_ptr<BaseStorage>& cloud) override {
+        LOG_INFO("CLOUD DOWNLOAD", "Update file download started: %s", _dto->rel_path.string().c_str());
         _dto->cloud_id = _cloud_id;
         _handle = std::make_unique<RequestHandle>();
         cloud->setupDownloadHandle(_handle, _dto);
@@ -319,7 +493,12 @@ public:
 
     void completionCallback(const std::unique_ptr<Database>& db, const std::shared_ptr<BaseStorage>& cloud) override {
         LOG_INFO("CLOUD DOWNLOAD", "Updated file downloaded (tmp): %s",
-            _dto->new_rel_path.string().c_str());
+            _dto->rel_path.string().c_str());
+        for (auto& next_command : _next_commands) {
+            next_command->setDTO(std::make_unique<FileUpdatedDTO>(*_dto));
+        }
+
+        notifyFinished();
         continueChain();
     }
 
@@ -327,13 +506,21 @@ public:
         return *_handle;
     }
 
-    const std::string getTarget() const override {
-        return _dto->new_rel_path.filename().string();
+    void setDTO(std::unique_ptr<FileUpdatedDTO> dto) override {
+        _dto = std::move(dto);
+    }
+
+    std::string getTarget() const override {
+        return _dto->rel_path.filename().string();
+    }
+
+    EntryType getTargetType() const override {
+        return _dto->type;
     }
 
 private:
     std::unique_ptr<RequestHandle> _handle;
-    std::unique_ptr<FileModifiedDTO> _dto;
+    std::unique_ptr<FileUpdatedDTO> _dto;
 };
 
 class CloudDeleteCommand : public CloudCommand {
@@ -360,6 +547,11 @@ public:
     void completionCallback(const std::unique_ptr<Database>& db, const std::shared_ptr<BaseStorage>& cloud) override {
         cloud->proccesDelete(_dto, _handle->_response);
         LOG_INFO("CLOUD DELETE", "Completed for entry: %s on: %s", this->getTarget(), CloudResolver::getName(_cloud_id));
+        for (auto& next_command : _next_commands) {
+            next_command->setDTO(std::make_unique<FileDeletedDTO>(*_dto));
+        }
+
+        notifyFinished();
         continueChain();
     }
 
@@ -371,7 +563,7 @@ public:
         return *_handle;
     }
 
-    const std::string getTarget() const override {
+    std::string getTarget() const override {
         return _dto->rel_path.string();
     }
 

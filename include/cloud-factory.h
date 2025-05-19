@@ -17,7 +17,7 @@ public:
         case CloudProviderType::GoogleDrive:
             return std::make_shared<GoogleDrive>(std::forward<Args>(args)...);
         default:
-            throw std::invalid_argument("Unknown CloudProviderType");
+            throw std::invalid_argument("CloudFactory create(): Unknown CloudProviderType");
         }
     }
 };

@@ -89,8 +89,12 @@ void HttpClient::submit(std::unique_ptr<ICommand> command) {
         command->getTarget(),
         CloudResolver::getName(command->getId())
     );
-    _large_active_count.increment();
     command->execute(_clouds[cloud_id]);
+    if (!command->getHandle()._curl) {
+        LOG_ERROR("HttpClient", "No CURL handle in multi_perform: for target:", command->getTarget());
+        return;
+    }
+    _large_active_count.increment();
     _large_queue.push(std::move(command));
 }
 
@@ -113,22 +117,12 @@ void HttpClient::largeRequestsWorker() {
         if (_large_active_count.isIdle()) {
             if (_large_queue.pop(request_command)) {
                 LOG_DEBUG("HttpClient", "Adding CURL handle for file: %s and cloud: %s", request_command->getTarget(), CloudResolver::getName(request_command->getId()));
-                if (!request_command->getHandle()._curl) {
-                    LOG_ERROR("HttpClient", "No CURL handle in multi_perform: for target:", request_command->getTarget());
-                    _large_active_count.decrement();
-                    break;
-                }
                 curl_multi_add_handle(_large_multi_handle, request_command->getHandle()._curl);
                 _active_handles.emplace(request_command->getHandle()._curl, std::move(request_command));
             }
         }
         else {
             while (_large_queue.try_pop(request_command) && _large_active_count.get() < _MAX_CONCURRENT) {
-                if (!request_command->getHandle()._curl) {
-                    LOG_ERROR("HttpClient", "No CURL handle in multi_perform: for target:", request_command->getTarget());
-                    _large_active_count.decrement();
-                    break;
-                }
                 LOG_DEBUG("HttpClient", "Adding CURL handle for file: %s and cloud: %s", request_command->getTarget(), CloudResolver::getName(request_command->getId()));
                 curl_multi_add_handle(_large_multi_handle, request_command->getHandle()._curl);
                 _active_handles.emplace(request_command->getHandle()._curl, std::move(request_command));
@@ -173,6 +167,7 @@ void HttpClient::largeRequestsWorker() {
 
                 if (msg->data.result != CURLE_OK) {
                     LOG_ERROR("HttpClient", "curl failed with code: %i and msg: %s", mc, curl_easy_strerror(msg->data.result));
+                    _large_active_count.decrement();
                 }
                 else if (http_code == 403 || http_code == 429 || http_code == 408 || http_code >= 500 && http_code < 600) {
                     LOG_WARNING("HttpClient", "HTTP code %i, scheduling retry", http_code);
@@ -182,6 +177,7 @@ void HttpClient::largeRequestsWorker() {
                 }
                 else if (http_code != 200) {
                     LOG_ERROR("HttpClient", "Unexpected HTTP code %i with response: %s", http_code, _active_handles[easy]->getHandle()._response);
+                    _large_active_count.decrement();
                 }
                 else {
                     LOG_DEBUG(
@@ -190,9 +186,9 @@ void HttpClient::largeRequestsWorker() {
                         _active_handles[easy]->getHandle()._response
                     );
                     CallbackDispatcher::get().submit(std::move(_active_handles[easy]));
+                    _large_active_count.decrement();
                 }
                 _active_handles.erase(easy);
-                _large_active_count.decrement();
             }
         }
         checkDelayedRequests();

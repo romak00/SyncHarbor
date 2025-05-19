@@ -1,10 +1,13 @@
 #pragma once
 
 #include "BaseStorage.h"
+#include "change-factory.h"
 #include "wtr/watcher.hpp" 
-#include <xxhash.h>
 #include "logger.h"
-#include "command.h"
+
+#define XXH_INLINE_ALL
+#include <xxhash.h>
+
 
 #ifdef _WIN32
 #include <windows.h>
@@ -19,37 +22,34 @@ public:
     LocalStorage(const std::filesystem::path& home_dir, const int cloud_id, const std::shared_ptr<Database>& db_conn);
 
     void setupUploadHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileRecordDTO>& dto) const override {}
-    void setupUpdateHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileModifiedDTO>& dto) const override {}
+    void setupUpdateHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileUpdatedDTO>& dto) const override {}
     void setupDownloadHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileRecordDTO>& dto) const override {}
+    void setupDownloadHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileUpdatedDTO>& dto) const override {}
     void setupDeleteHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileDeletedDTO>& dto) const override {}
+    void setupMoveHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileMovedDTO>& dto) const override {}
 
-    std::vector<std::unique_ptr<FileRecordDTO>> initialFiles() override { return {}; }
-    void getChanges(const std::unique_ptr<RequestHandle>& handle) override {}
-    bool handleChangesResponse(const std::unique_ptr<RequestHandle>& handle, std::vector<std::string>& pages)override { return ""; }
+    std::vector<std::unique_ptr<FileRecordDTO>> initialFiles() override;
+    void getChanges() override {}
+
     std::vector<std::unique_ptr<Change>> proccessChanges() override;
-
-    void subscribeToChanges(
-        const std::unique_ptr<RequestHandle>& handle,
-        const std::string& callback_url,
-        const std::string& channel_id
-    ) override {
-    }
 
     CloudProviderType getType() const override { return CloudProviderType::LocalStorage; }
 
-    void proccesUpload(std::unique_ptr<FileRecordDTO>& dto, const std::string& response) const override {}
+    void proccesUpload(std::unique_ptr<FileRecordDTO>& dto, const std::string& response = "") const override;
 
-    void proccesUpdate(std::unique_ptr<FileModifiedDTO>& dto, const std::string& response) const override;
-    void proccesDownload(std::unique_ptr<FileRecordDTO>& dto, const std::string& response) const override {}
-    void proccesDelete(std::unique_ptr<FileDeletedDTO>& dto, const std::string& response) const override {}
+    void proccesUpdate(std::unique_ptr<FileUpdatedDTO>& dto, const std::string& response = "") const override;
+    void proccesDownload(std::unique_ptr<FileUpdatedDTO>& dto, const std::string& response = "") const override {}
+    void proccesDelete(std::unique_ptr<FileDeletedDTO>& dto, const std::string& response = "") const override {}
+    void proccesMove(std::unique_ptr<FileMovedDTO>& dto, const std::string& response = "") const override {}
 
+    std::vector<std::unique_ptr<FileRecordDTO>> createPath(const std::filesystem::path& path, const std::filesystem::path& missing) override;
 
     std::string buildAuthURL(int local_port) const override { return ""; }
     void getRefreshToken(const std::string& code, const int local_port) override {}
     void refreshAccessToken() override {}
     void proccessAuth(const std::string& responce) override {}
-    void setDelta(const std::string& response) override {}
-    void getDelta(const std::unique_ptr<RequestHandle>& handle) override {}
+
+    std::string getDeltaToken() override { return ""; }
 
 
     int id() const override {
@@ -59,24 +59,25 @@ public:
     void startWatching();
     void stopWatching();
 
-    std::vector<std::unique_ptr<Change>> flushOldDeletes() override;
-
     std::string getHomeDir() const override;
 
     ~LocalStorage() noexcept override;
 
     bool hasChanges() const override;
 
-    uint64_t getFileId(const std::filesystem::path& p) const;
-    uint64_t computeFileHash(const std::filesystem::path& path, uint64_t seed = 0) const;
 
     void setRawSignal(std::shared_ptr<RawSignal> raw_signal) override;
 
-    bool isRealTime() const override;
-
     void ensureRootExists() override {}
+
 private:
+    uint64_t getFileId(const std::filesystem::path& p) const;
+    uint64_t computeFileHash(const std::filesystem::path& path, uint64_t seed = 0) const;
     void onFsEvent(const wtr::event& e);
+
+    bool isDoc(const std::filesystem::path& path) const;
+
+    friend class LocalStorageTest;
 
     void handleRenamed(const FileEvent& evt);
 
@@ -87,15 +88,11 @@ private:
 
     std::time_t fromWatcherTime(const long long);
 
-    bool checkUndo(const FileEvent& evt);
-
     bool ignoreTmp(const std::filesystem::path& path);
 
     ThreadSafeQueue<std::unique_ptr<Change>> _changes_queue;
     ThreadSafeQueue<FileEvent> _events_buff;
     mutable ThreadSafeEventsregister _expected_events;
-
-    std::unordered_map<uint64_t, FileEvent> _pending_deletes;
 
     std::unique_ptr<wtr::watcher::watch> _watcher;
 
@@ -105,11 +102,7 @@ private:
 
     std::filesystem::path _local_home_dir;
 
-    std::condition_variable _cleanup_cv;
-    std::mutex _cleanup_mtx;
-
     std::atomic<bool> _watching = false;
 
-    int _UNDO_INTERVAL{ 15 };
     int _id;
 };

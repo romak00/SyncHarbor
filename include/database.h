@@ -18,7 +18,6 @@ public:
         const CloudProviderType type,
         const nlohmann::json& config_data);
     nlohmann::json get_cloud_config(const int cloud_id);
-    int add_file(const FileRecordDTO& dto);
     void update_cloud_data(const int cloud_id, const nlohmann::json& data);
     std::filesystem::path getPathByGlobalId(const int search_global_id);
     std::string get_cloud_file_id_by_cloud_id(const int cloud_id, const int global_id);
@@ -26,19 +25,33 @@ public:
     std::string get_cloud_type(const int cloud_id);
     std::string get_cloud_parent_id_by_cloud_id(const int cloud_id, const std::string& cloud_file_id);
     std::unique_ptr<FileRecordDTO> getFileByCloudIdAndCloudFileId(const int cloud_id, const std::string& cloud_file_id);
-    void update_file_link_one_field(const int cloud_id, const int global_id, const std::string& field, const std::string& new_str);
-    void update_file_time(const int global_id, const std::string& field, const std::time_t& time);
-    void update_file_path(const int global_id, const std::string& field, const std::string& path);
+    
+    int add_file(const FileRecordDTO& dto);
     void add_file_link(const FileRecordDTO& dto);
-    void update_file_link(const FileModifiedDTO& dto);
-    void update_file(const FileModifiedDTO& dto);
+
+    void update_file_link(const FileUpdatedDTO& dto);
+    void update_file(const FileUpdatedDTO& dto);
+
+    void update_file_link(const FileMovedDTO& dto);
+    void update_file(const FileMovedDTO& dto);
+
     void delete_file_and_links(const int global_id);
     std::unique_ptr<FileRecordDTO> getFileByFileId(const uint64_t file_id);
+    std::unique_ptr<FileRecordDTO> getFileByGlobalId(const int global_id);
     int getGlobalIdByFileId(const uint64_t file_id);
+    int getGlobalIdByPath(const std::filesystem::path& path);
+
+    std::string getCloudFileIdByPath(const std::filesystem::path& path, const int cloud_id);
+
+    bool quickPathCheck(const std::filesystem::path& path);
+
+    std::filesystem::path getMissingPathPart(const std::filesystem::path& path, const int num_clouds);
+
+    std::string getParentId(const int cloud_id, const int global_id);
 
     bool isInitialSyncDone();
     void markInitialSyncDone();
-    
+
 
 private:
     sqlite3* _db;

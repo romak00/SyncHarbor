@@ -36,17 +36,20 @@ public:
 
     void setupUploadHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileRecordDTO>& dto) const override;
 
-    void setupUpdateHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileModifiedDTO>& dto) const override;
+    void setupUpdateHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileUpdatedDTO>& dto) const override;
     void setupDownloadHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileRecordDTO>& dto) const override;
-    void setupDownloadHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileModifiedDTO>& dto) const override;
+    void setupDownloadHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileUpdatedDTO>& dto) const override;
     void setupDeleteHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileDeletedDTO>& dto) const override;
+    void setupMoveHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileMovedDTO>& dto) const override;
 
-    void getChanges(const std::unique_ptr<RequestHandle>& handle) override {}
-    std::vector<std::unique_ptr<Change>> proccessChanges() override { return {}; }
-    bool handleChangesResponse(const std::unique_ptr<RequestHandle>& handle, std::vector<std::string>& pages) override { return ""; }
+    void getChanges() override;
+    std::vector<std::unique_ptr<Change>> proccessChanges() override;
+
     std::vector<std::unique_ptr<FileRecordDTO>> initialFiles() override;
 
     int id() const override;
+
+    std::vector<std::unique_ptr<FileRecordDTO>> createPath(const std::filesystem::path& path, const std::filesystem::path& missing) override;
 
     /* std::unique_ptr<CurlEasyHandle> create_file_upload_handle(const std::filesystem::path& path, const std::string& parent = "") override;
     std::unique_ptr<CurlEasyHandle> create_dir_upload_handle(const std::filesystem::path& path, const std::string& parent = "") override;
@@ -58,20 +61,12 @@ public:
     std::vector<nlohmann::json> get_changes(const int cloud_id, std::shared_ptr<Database> db_conn) override; */
     void proccesUpload(std::unique_ptr<FileRecordDTO>& dto, const std::string& response) const override;
 
-    void proccesUpdate(std::unique_ptr<FileModifiedDTO>& dto, const std::string& response) const override;
-    void proccesDownload(std::unique_ptr<FileRecordDTO>& dto, const std::string& response) const override;
+    void proccesUpdate(std::unique_ptr<FileUpdatedDTO>& dto, const std::string& response) const override;
+    void proccesDownload(std::unique_ptr<FileUpdatedDTO>& dto, const std::string& response) const override;
     void proccesDelete(std::unique_ptr<FileDeletedDTO>& dto, const std::string& response) const override;
-
-    std::vector<std::unique_ptr<Change>> flushOldDeletes() override { return {}; }
+    void proccesMove(std::unique_ptr<FileMovedDTO>& dto, const std::string& response) const override;
 
     void refreshAccessToken() override;
-
-    void subscribeToChanges(
-        const std::unique_ptr<RequestHandle>& handle,
-        const std::string& callback_url,
-        const std::string& channel_id
-    ) override {
-    }
 
     std::string getHomeDir() const override;
 
@@ -87,17 +82,15 @@ public:
 
     void getRefreshToken(const std::string& code, const int local_port) override;
 
-    void setDelta(const std::string& response) override;
-    void getDelta(const std::unique_ptr<RequestHandle>& handle) override;
-
     void ensureRootExists() override;
+
+    std::string getDeltaToken() override;
 
     ~Dropbox() = default;
 
-    bool isRealTime() const override;
-
 private:
-    void get_start_page_token();
+
+    bool isDropboxShortcutJsonFile(const std::filesystem::path& path) const;
 
     std::filesystem::path _home_path;
     std::filesystem::path _local_home_path;
@@ -108,6 +101,7 @@ private:
     std::string _page_token;
 
     ThreadSafeQueue<std::vector<std::string>> _events_buff;
+    mutable ThreadSafeEventsregister _expected_events;
 
     std::shared_ptr<Database> _db;
 

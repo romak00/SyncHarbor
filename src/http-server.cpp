@@ -1,4 +1,5 @@
 #include "http-server.h"
+#include "logger.h"
 
 LocalHttpServer::LocalHttpServer(int port)
     : _port(port), _svr(), _running(false)

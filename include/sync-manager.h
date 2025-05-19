@@ -11,6 +11,7 @@
 #include "http-server.h"
 #include "cloud-factory.h"
 #include "change-factory.h"
+#include "conflict-resolver.h"
 
 class SyncManager {
 public:
@@ -39,11 +40,16 @@ public:
 
     std::vector<std::filesystem::path> checkLocalPermissions() const;
 
+    void onChangeCompleted(const std::filesystem::path& path,
+        std::vector<std::unique_ptr<Change>>&& dependents);
+
     void registerCloud(const std::string& cloud_name, const CloudProviderType type, const std::string& client_id, const std::string& client_secret, const std::filesystem::path& home_path);
 private:
     void init();
 
     void changeFinished();
+
+    void createPath(const std::filesystem::path& path, const std::filesystem::path& missing);
 
     void loadConfig();
 
@@ -67,10 +73,13 @@ private:
 
     void handleChange(std::unique_ptr<Change> change);
 
+    bool ensureParentDirectories(const std::filesystem::path& path);
+
     void setRawSignal();
 
     void ensureRootsExist();
 
+    void startChange(const std::filesystem::path& path, std::unique_ptr<Change> change);
 
     void refreshAccessTokens();
 
@@ -83,7 +92,7 @@ private:
     std::string _config_path;
     std::string _db_file;
 
-    std::unordered_map<std::string, std::unique_ptr<Change>> _pending_changes;
+    std::unordered_map<std::filesystem::path, std::unique_ptr<Change>> _current_changes;
     ThreadSafeQueue<std::unique_ptr<Change>> _changes_buff;
 
     std::unordered_map<int, std::shared_ptr<BaseStorage>> _clouds;
@@ -98,10 +107,12 @@ private:
     std::unique_ptr<std::thread> _changes_worker;
 
     std::shared_ptr<RawSignal> _raw_signal;
-    
+
     std::atomic<bool> _should_exit;
 
     std::time_t _next_token_refresh;
+
+    int _num_clouds;
 
     Mode _mode;
 };
