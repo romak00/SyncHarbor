@@ -1,7 +1,6 @@
 build*
 .vscode*
 *.sqlite3*
-mk.sh
 change.json
 *cloudsync*
 DatabaseTests
