@@ -1,0 +1,26 @@
+{
+  "clouds": [
+    {
+      "name": "dropbox1",
+      "type": "Dropbox",
+      "data": {
+        "client_id": "qc1cw5yaa3dac1d",
+        "client_secret": "d0bcxwa1ejd56u0",
+        "refresh_token": "2F_SI0jvfr0AAAAAAAAAAX_xtDZIIjrFOs7YS6_r-9ngmHyv5IE4t5EOUxe07sFm",
+        "dir": "/demo"
+      }
+    },
+    {
+      "name": "google1",
+      "type": "GoogleDrive",
+      "data": {
+        "client_id": "425163723279-2mqd9578g7tkd7gpq2butd4sjae59djg.apps.googleusercontent.com",
+        "client_secret": "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",
+        "refresh_token": "1//09u4RLojRDh5GCgYIARAAGAkSNwF-L9IrchE_MLe-c_OkjsJfTn2ux4YddEVRoXack-uJnsrtBy02nIIICd990fpWayxuqJ45R2w",
+        "dir": "/demo"
+      }
+    }
+  ]
+}
+
+
