@@ -39,8 +39,8 @@ public:
 
     void proccesUpdate(std::unique_ptr<FileUpdatedDTO>& dto, const std::string& response = "") const override;
     void proccesDownload(std::unique_ptr<FileUpdatedDTO>& dto, const std::string& response = "") const override {}
-    void proccesDelete(std::unique_ptr<FileDeletedDTO>& dto, const std::string& response = "") const override {}
-    void proccesMove(std::unique_ptr<FileMovedDTO>& dto, const std::string& response = "") const override {}
+    void proccesDelete(std::unique_ptr<FileDeletedDTO>& dto, const std::string& response = "") const override;
+    void proccesMove(std::unique_ptr<FileMovedDTO>& dto, const std::string& response = "") const override;
 
     std::vector<std::unique_ptr<FileRecordDTO>> createPath(const std::filesystem::path& path, const std::filesystem::path& missing) override;
 
@@ -65,30 +65,31 @@ public:
 
     bool hasChanges() const override;
 
-
-    void setRawSignal(std::shared_ptr<RawSignal> raw_signal) override;
-
     void ensureRootExists() override {}
 
-private:
     uint64_t getFileId(const std::filesystem::path& p) const;
     uint64_t computeFileHash(const std::filesystem::path& path, uint64_t seed = 0) const;
     void onFsEvent(const wtr::event& e);
 
+    
     bool isDoc(const std::filesystem::path& path) const;
-
+    
     friend class LocalStorageTest;
-
+    
     void handleRenamed(const FileEvent& evt);
-
+    
     void handleDeleted(const FileEvent& evt);
     void handleUpdated(const FileEvent& evt);
     void handleCreated(const FileEvent& evt);
     void handleMoved(const FileEvent& evt);
-
+    
     std::time_t fromWatcherTime(const long long);
-
+    
     bool ignoreTmp(const std::filesystem::path& path);
+
+    void setOnChange(std::function<void()> cb) override;
+
+private:
 
     ThreadSafeQueue<std::unique_ptr<Change>> _changes_queue;
     ThreadSafeQueue<FileEvent> _events_buff;
@@ -98,7 +99,7 @@ private:
 
     std::shared_ptr<Database> _db;
 
-    std::shared_ptr<RawSignal> _raw_signal;
+    std::function<void()> _onChange;
 
     std::filesystem::path _local_home_dir;
 

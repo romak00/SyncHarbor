@@ -42,9 +42,9 @@ public:
 
     virtual bool hasChanges() const = 0;
 
-    virtual std::vector<std::unique_ptr<Change>> proccessChanges() = 0;
+    virtual void setOnChange(std::function<void()> cb) = 0;
 
-    virtual void setRawSignal(std::shared_ptr<RawSignal> raw_signal) = 0;
+    virtual std::vector<std::unique_ptr<Change>> proccessChanges() = 0;
 
     virtual void ensureRootExists() = 0;
 };

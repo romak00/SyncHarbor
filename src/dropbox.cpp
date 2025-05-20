@@ -56,13 +56,15 @@ Dropbox::Dropbox(
     :
     _client_id(client_id),
     _client_secret(client_secret),
-    //_refresh_token(refresh_token),
+    _refresh_token(refresh_token),
     _page_token(start_page_token),
     _home_path(home_path),
     _local_home_path(local_home_path),
     _db(db_conn),
     _id(cloud_id)
 {
+    this->refreshAccessToken();
+    this->ensureRootExists();
 }
 
 bool Dropbox::isDropboxShortcutJsonFile(const std::filesystem::path& path) const {
@@ -101,6 +103,8 @@ void Dropbox::setupUploadHandle(const std::unique_ptr<RequestHandle>& handle, co
     curl_easy_setopt(handle->_curl, CURLOPT_POST, 1L);
 
     handle->setCommonCURLOpt();
+
+    _expected_events.add(dto->rel_path, ChangeType::New);
 }
 
 void Dropbox::setupDownloadHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileRecordDTO>& dto) const {
@@ -174,6 +178,8 @@ void Dropbox::setupUpdateHandle(const std::unique_ptr<RequestHandle>& handle, co
     
     handle->setFileStream(file_path.string(), std::ios::in);
     handle->setCommonCURLOpt();
+
+    _expected_events.add(dto->cloud_file_id, ChangeType::Update);
 }
 
 void Dropbox::setupMoveHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileMovedDTO>& dto) const {
@@ -201,11 +207,13 @@ void Dropbox::setupMoveHandle(const std::unique_ptr<RequestHandle>& handle, cons
     curl_easy_setopt(handle->_curl, CURLOPT_URL,
         "https://api.dropboxapi.com/2/files/move_v2");
     curl_easy_setopt(handle->_curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(handle->_curl, CURLOPT_POSTFIELDS, body_str.c_str());
+    curl_easy_setopt(handle->_curl, CURLOPT_COPYPOSTFIELDS, body_str.c_str());
 
     handle->addHeaders("Authorization: Bearer " + _access_token);
     handle->addHeaders("Content-Type: application/json");
     handle->setCommonCURLOpt();
+
+    _expected_events.add(dto->cloud_file_id, ChangeType::Move);
 }
 
 std::vector<std::unique_ptr<FileRecordDTO>> Dropbox::createPath(const std::filesystem::path& path, const std::filesystem::path& missing) {
@@ -276,6 +284,7 @@ std::vector<std::unique_ptr<FileRecordDTO>> Dropbox::createPath(const std::files
                     "Dropbox create_folder_v2 error: " + summary
                 );
             }
+            _expected_events.check(std::filesystem::relative(accum, _home_path), ChangeType::New);
         }
         else {
             auto meta = j["metadata"];
@@ -320,6 +329,8 @@ void Dropbox::setupDeleteHandle(const std::unique_ptr<RequestHandle>& handle, co
     handle->addHeaders("Authorization: Bearer " + _access_token);
     handle->addHeaders("Content-Type: application/json");
     handle->setCommonCURLOpt();
+
+    _expected_events.add(dto->cloud_file_id, ChangeType::Delete);
 }
 
 std::vector<std::unique_ptr<FileRecordDTO>> Dropbox::initialFiles() {
@@ -420,10 +431,6 @@ int Dropbox::id() const {
 
 bool Dropbox::hasChanges() const {
     return !_events_buff.empty();
-}
-
-void Dropbox::setRawSignal(std::shared_ptr<RawSignal> raw_signal) {
-    _raw_signal = std::move(raw_signal);
 }
 
 void Dropbox::ensureRootExists() {
@@ -656,8 +663,12 @@ void Dropbox::getChanges() {
     }
     if (any_entries) {
         _events_buff.push(pages);
-        _raw_signal->cv.notify_one();
+        _onChange();
     }
+}
+
+void Dropbox::setOnChange(std::function<void()> cb) {
+    _onChange = std::move(cb);
 }
 
 std::vector<std::unique_ptr<Change>> Dropbox::proccessChanges() {
@@ -712,15 +723,15 @@ std::vector<std::unique_ptr<Change>> Dropbox::proccessChanges() {
                 LOG_DEBUG("Dropbox", "Expected NEW: %s", raw.c_str());
                 continue;
             }
-            if (need_del && _expected_events.check(rel_path, ChangeType::Delete)) {
+            if (need_del && _expected_events.check(cloud_file_id, ChangeType::Delete)) {
                 LOG_DEBUG("Dropbox", "Expected DELETE: %s", raw.c_str());
                 continue;
             }
-            if (need_move && _expected_events.check(rel_path, ChangeType::Move)) {
+            if (need_move && _expected_events.check(cloud_file_id, ChangeType::Move)) {
                 LOG_DEBUG("Dropbox", "Expected MOVE: %s", raw.c_str());
                 continue;
             }
-            if (need_update && _expected_events.check(rel_path, ChangeType::Update)) {
+            if (need_update && _expected_events.check(cloud_file_id, ChangeType::Update)) {
                 LOG_DEBUG("Dropbox", "Expected UPDATE: %s", raw.c_str());
                 continue;
             }

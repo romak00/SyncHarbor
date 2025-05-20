@@ -179,12 +179,55 @@ std::unique_ptr<FileRecordDTO> Database::getFileByFileId(const uint64_t file_id)
     if (rc != SQLITE_ROW) {
         sqlite3_finalize(stmt);
         LOG_ERROR("Database", "No file found for given file_id: %i", file_id);
-        return std::make_unique<FileRecordDTO>();
+        return nullptr;
     }
 
     int global_id = sqlite3_column_int64(stmt, 0);
     EntryType type = entry_type_from_string(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)));
     std::string path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+    sqlite3_int64 raw_size = sqlite3_column_int64(stmt, 3);
+    uint64_t size = static_cast<uint64_t>(raw_size);
+    sqlite3_int64 raw_hash = sqlite3_column_int64(stmt, 4);
+    uint64_t local_hash = static_cast<uint64_t>(raw_hash);
+    uint64_t local_modified_time = sqlite3_column_int64(stmt, 5);
+
+    sqlite3_finalize(stmt);
+
+    return std::make_unique<FileRecordDTO>(
+        global_id,
+        type,
+        path,
+        size,
+        local_hash,
+        local_modified_time,
+        file_id
+    );
+}
+
+std::unique_ptr<FileRecordDTO> Database::getFileByPath(const std::filesystem::path& path) {
+    sqlite3_stmt* stmt = nullptr;
+    int rc = 0;
+
+    std::string sql = "SELECT global_id, type, file_id, size, local_hash, local_modified_time FROM files WHERE path = ?;";
+    rc = sqlite3_prepare_v2(_db, sql.c_str(), -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("Failed to prepare statement getFileByPath)");
+    }
+
+    sqlite3_bind_text(stmt, 1, path.c_str(), -1 , SQLITE_STATIC);
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        LOG_ERROR("Database", "No file found for given path: %i", path.c_str());
+        return nullptr;
+    }
+
+    int global_id = sqlite3_column_int64(stmt, 0);
+    EntryType type = entry_type_from_string(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)));
+    sqlite3_int64 raw_file_id = sqlite3_column_int64(stmt, 2);
+    uint64_t file_id = static_cast<uint64_t>(raw_file_id);
     sqlite3_int64 raw_size = sqlite3_column_int64(stmt, 3);
     uint64_t size = static_cast<uint64_t>(raw_size);
     sqlite3_int64 raw_hash = sqlite3_column_int64(stmt, 4);
@@ -599,6 +642,45 @@ std::unique_ptr<FileRecordDTO> Database::getFileByCloudIdAndCloudFileId(const in
         return nullptr;
     }
     int global_id = sqlite3_column_int64(stmt, 0);
+    std::string cloud_parent_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+    std::string cloud_hash_check_sum = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+    time_t cloud_file_modified_time = sqlite3_column_int64(stmt, 3);
+    sqlite3_int64 raw_size = sqlite3_column_int64(stmt, 4);
+    uint64_t cloud_size = static_cast<uint64_t>(raw_size);
+
+    sqlite3_finalize(stmt);
+
+    return std::make_unique<FileRecordDTO>(
+        global_id,
+        cloud_id,
+        cloud_parent_id,
+        cloud_file_id,
+        cloud_size,
+        cloud_hash_check_sum,
+        cloud_file_modified_time
+    );
+}
+
+std::unique_ptr<FileRecordDTO> Database::getFileByCloudIdAndGlobalId(const int cloud_id, const int global_id) {
+    sqlite3_stmt* stmt = nullptr;
+    int rc = 0;
+
+    std::string sql = "SELECT cloud_file_id, cloud_parent_id, cloud_hash_check_sum, cloud_file_modified_time, cloud_size FROM file_links WHERE cloud_id = ? AND gobal_id = ? LIMIT 1;";
+    rc = sqlite3_prepare_v2(_db, sql.c_str(), -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("Failed to prepare statement get_global_id");
+    }
+    sqlite3_bind_int64(stmt, 1, cloud_id);
+    sqlite3_bind_int64(stmt, 2, global_id);
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        LOG_WARNING("DATABASE", "No link found for pair cloud_id: %i and cloud_file_id: %i", cloud_id, global_id);
+        return nullptr;
+    }
+    std::string cloud_file_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
     std::string cloud_parent_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
     std::string cloud_hash_check_sum = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
     time_t cloud_file_modified_time = sqlite3_column_int64(stmt, 3);

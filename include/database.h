@@ -24,7 +24,9 @@ public:
     std::vector<nlohmann::json> get_clouds();
     std::string get_cloud_type(const int cloud_id);
     std::string get_cloud_parent_id_by_cloud_id(const int cloud_id, const std::string& cloud_file_id);
+
     std::unique_ptr<FileRecordDTO> getFileByCloudIdAndCloudFileId(const int cloud_id, const std::string& cloud_file_id);
+    std::unique_ptr<FileRecordDTO> getFileByCloudIdAndGlobalId(const int cloud_id, const int global_id);
     
     int add_file(const FileRecordDTO& dto);
     void add_file_link(const FileRecordDTO& dto);
@@ -37,6 +39,7 @@ public:
 
     void delete_file_and_links(const int global_id);
     std::unique_ptr<FileRecordDTO> getFileByFileId(const uint64_t file_id);
+    std::unique_ptr<FileRecordDTO> getFileByPath(const std::filesystem::path& path);
     std::unique_ptr<FileRecordDTO> getFileByGlobalId(const int global_id);
     int getGlobalIdByFileId(const uint64_t file_id);
     int getGlobalIdByPath(const std::filesystem::path& path);

@@ -62,6 +62,8 @@ GoogleDrive::GoogleDrive(
     _id(cloud_id),
     _home_path(home_dir)
 {
+    this->refreshAccessToken();
+    this->ensureRootExists();
 }
 
 std::optional<GoogleDocMimeInfo> GoogleDrive::getGoogleDocMimeByExtension(const std::filesystem::path& path) const {
@@ -203,7 +205,7 @@ std::vector<std::unique_ptr<FileRecordDTO>> GoogleDrive::createPath(const std::f
         handle->setCommonCURLOpt();
         handle->_response.clear();
 
-        _expected_events.add(_home_path / accum, ChangeType::New);
+        _expected_events.add(accum, ChangeType::New);
 
         HttpClient::get().syncRequest(handle);
 
@@ -265,12 +267,16 @@ void GoogleDrive::setupUpdateHandle(const std::unique_ptr<RequestHandle>& handle
 
     curl_easy_setopt(handle->_curl, CURLOPT_CUSTOMREQUEST, "PATCH");
 
+    curl_easy_setopt(handle->_curl, CURLOPT_UPLOAD, 1L);
+
     handle->setFileStream(file_path, std::ios::in);
 
     handle->addHeaders("Authorization: Bearer " + _access_token);
     handle->addHeaders("Content-Type: application/octet-stream");
 
     handle->setCommonCURLOpt();
+
+    _expected_events.add(dto->cloud_file_id, ChangeType::Update);
 }
 
 void GoogleDrive::setupMoveHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileMovedDTO>& dto) const {
@@ -306,6 +312,8 @@ void GoogleDrive::setupMoveHandle(const std::unique_ptr<RequestHandle>& handle, 
     
     handle->addHeaders("Authorization: Bearer " + _access_token);
     handle->setCommonCURLOpt();
+
+    _expected_events.add(dto->cloud_file_id, ChangeType::Move);
 }
 
 void GoogleDrive::setupDeleteHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileDeletedDTO>& dto) const {
@@ -316,6 +324,8 @@ void GoogleDrive::setupDeleteHandle(const std::unique_ptr<RequestHandle>& handle
 
     handle->addHeaders("Authorization: Bearer " + _access_token);
     handle->setCommonCURLOpt();
+
+    _expected_events.add(dto->cloud_file_id, ChangeType::Delete);
 }
 
 std::vector<std::unique_ptr<FileRecordDTO>> GoogleDrive::initialFiles() {
@@ -668,7 +678,7 @@ void GoogleDrive::getChanges() {
 
     std::string page_token = _page_token;
 
-    std::vector<std::string> pages;
+    std::vector<nlohmann::json> pages;
 
     handle->addHeaders("Authorization: Bearer " + _access_token);
     handle->setCommonCURLOpt();
@@ -701,17 +711,17 @@ void GoogleDrive::getChanges() {
     if (!changes["changes"].empty()) {
         _events_buff.push(pages);
 
-        _raw_signal->cv.notify_one();
+        _onChange();
     }
 }
 
-void GoogleDrive::setRawSignal(std::shared_ptr<RawSignal> raw_signal) {
-    _raw_signal = std::move(raw_signal);
+void GoogleDrive::setOnChange(std::function<void()> cb) {
+    _onChange = std::move(cb);
 }
 
 std::vector<std::unique_ptr<Change>> GoogleDrive::proccessChanges() {
     std::vector<std::unique_ptr<Change>> changes;
-    std::vector<std::string> raw_pages;
+    std::vector<nlohmann::json> raw_pages;
 
     if (!_events_buff.try_pop(raw_pages))
         return changes;
@@ -719,9 +729,8 @@ std::vector<std::unique_ptr<Change>> GoogleDrive::proccessChanges() {
     std::unordered_map<std::string, std::filesystem::path> path_map;
     std::unordered_map<std::string, std::unique_ptr<FileRecordDTO>> maybe_new;
 
-    for (const auto& raw_page : raw_pages) {
-        auto page = nlohmann::json::parse(raw_page);
-        for (auto& jchange : page) {
+    for (const auto& page_json : raw_pages) {
+        for (auto& jchange : page_json["changes"]) {
 
             if (!jchange.contains("file")) {
                 LOG_WARNING("GoogleDrive", "Change without file field: %s", jchange.dump().c_str());
@@ -816,19 +825,19 @@ std::vector<std::unique_ptr<Change>> GoogleDrive::proccessChanges() {
                 }
             }
             if (need_del) {
-                if (_expected_events.check(rel_path, ChangeType::Delete)) {
+                if (_expected_events.check(cloud_file_id, ChangeType::Delete)) {
                     LOG_DEBUG("GoogleDrive", "Expected DELETE: %s", jchange.dump().c_str());
                     continue;
                 }
             }
             if (need_move) {
-                if (_expected_events.check(rel_path, ChangeType::Move)) {
+                if (_expected_events.check(cloud_file_id, ChangeType::Move)) {
                     LOG_DEBUG("GoogleDrive", "Expected MOVE: %s", jchange.dump().c_str());
                     continue;
                 }
             }
             if (need_update) {
-                if (_expected_events.check(rel_path, ChangeType::Update)) {
+                if (_expected_events.check(cloud_file_id, ChangeType::Update)) {
                     LOG_DEBUG("GoogleDrive", "Expected UPDATE: %s", jchange.dump().c_str());
                     continue;
                 }

@@ -53,8 +53,6 @@ private:
 
     void loadConfig();
 
-    void loadDBConfig();
-
     void setupClouds();
 
     void initialSync();
@@ -106,7 +104,9 @@ private:
     std::unique_ptr<std::thread> _polling_worker;
     std::unique_ptr<std::thread> _changes_worker;
 
-    std::shared_ptr<RawSignal> _raw_signal;
+    std::mutex _signal_mtx;
+    std::condition_variable _signal_cv;
+    std::atomic<bool> _signal_dirty;
 
     std::atomic<bool> _should_exit;
 

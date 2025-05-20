@@ -71,6 +71,35 @@ void LocalStorage::proccesUpdate(std::unique_ptr<FileUpdatedDTO>& dto, const std
     }
 }
 
+void LocalStorage::proccesMove(std::unique_ptr<FileMovedDTO>& dto, const std::string& response) const {
+    if (dto->cloud_id != 0) {
+        LOG_DEBUG(
+            "LOCAL STORAGE",
+            dto->old_rel_path.string(),
+            "trying to rename from %s to %s",
+            _local_home_dir.string() + "/" + dto->old_rel_path.string(),
+            _local_home_dir.string() + "/" + dto->new_rel_path.string()
+        );
+        _expected_events.add(_local_home_dir / dto->old_rel_path, ChangeType::Move);
+        std::filesystem::rename(
+            _local_home_dir / dto->old_rel_path,
+            _local_home_dir / dto->new_rel_path
+        );
+
+        _db->update_file_link(*dto);
+
+        std::filesystem::path full = _local_home_dir / dto->new_rel_path;
+        dto->cloud_file_modified_time = convertSystemTime(full);
+        dto->cloud_id = _id;
+    }
+}
+
+void LocalStorage::proccesDelete(std::unique_ptr<FileDeletedDTO>& dto, const std::string& response = "") const {
+    if (dto->cloud_id != 0) {
+        _expected_events.add(_local_home_dir / dto->rel_path, ChangeType::Delete);
+    }
+}
+
 bool LocalStorage::ignoreTmp(const std::filesystem::path& path) {
     constexpr std::string_view tmp_prefix{ ".-tmp-cloudsync-" };
     auto fn = path.filename().string();
@@ -152,9 +181,12 @@ void LocalStorage::onFsEvent(const wtr::event& e) {
         return;
     }
 
+    LOG_INFO("LocalStorage", "FS EVENT: %s", e.path_name.string());
+
     std::time_t time = fromWatcherTime(e.effect_time);
     switch (e.effect_type) {
     case wtr::event::effect_type::rename:
+        LOG_INFO("LocalStorage", "FS EVENT RENAME %s");
         _events_buff.push(
             FileEvent(
                 e.path_name,
@@ -169,6 +201,7 @@ void LocalStorage::onFsEvent(const wtr::event& e) {
         break;
 
     case wtr::event::effect_type::create:
+        LOG_INFO("LocalStorage", "FS EVENT CREATE %s");
         _events_buff.push(
             FileEvent(
                 e.path_name,
@@ -178,6 +211,7 @@ void LocalStorage::onFsEvent(const wtr::event& e) {
         break;
 
     case wtr::event::effect_type::destroy:
+        LOG_INFO("LocalStorage", "FS EVENT DESTROY %s");
         _events_buff.push(
             FileEvent(
                 e.path_name,
@@ -187,6 +221,7 @@ void LocalStorage::onFsEvent(const wtr::event& e) {
         break;
 
     case wtr::event::effect_type::modify:
+        LOG_INFO("LocalStorage", "FS EVENT MODIFY %s");
         _events_buff.push(
             FileEvent(
                 e.path_name,
@@ -199,9 +234,12 @@ void LocalStorage::onFsEvent(const wtr::event& e) {
         break;
     }
 
-    _raw_signal->cv.notify_one();
+    _onChange();
 }
 
+void LocalStorage::setOnChange(std::function<void()> cb) {
+    _onChange = std::move(cb);
+}
 
 std::vector<std::unique_ptr<Change>> LocalStorage::proccessChanges() {
     std::vector<std::unique_ptr<Change>> out;
@@ -256,10 +294,6 @@ std::time_t LocalStorage::fromWatcherTime(const long long effect_ns) {
     system_clock::time_point tp_effect{ d_effect };
 
     return system_clock::to_time_t(tp_effect);
-}
-
-void LocalStorage::setRawSignal(std::shared_ptr<RawSignal> raw_signal) {
-    _raw_signal = std::move(raw_signal);
 }
 
 std::vector<std::unique_ptr<FileRecordDTO>> LocalStorage::initialFiles() {
@@ -322,13 +356,19 @@ void LocalStorage::handleDeleted(const FileEvent& evt) {
         return;
     }
 
-    auto full = _local_home_dir / evt.path;
+    LOG_DEBUG("LocalStorage", "True DELETE: %s", evt.path.string());
+
+    auto full = evt.path;
     auto rel = std::filesystem::relative(full, _local_home_dir);
 
     int global_id = 0;
-    if (auto rec = _db->getFileByFileId(evt.file_id)) {
-        global_id = rec->global_id;
+    auto rec = _db->getFileByPath(rel);
+
+    if (!rec) {
+        LOG_WARNING("LocalStorage", "Delete of unknown file_id: %s", evt.path.string());
+        return;
     }
+    global_id = rec->global_id;
 
     auto dto = std::make_unique<FileDeletedDTO>(
         rel,
@@ -341,8 +381,9 @@ void LocalStorage::handleDeleted(const FileEvent& evt) {
 }
 
 void LocalStorage::handleRenamed(const FileEvent& evt) {
+    LOG_DEBUG("LocalStorage", "Renamed: %s", evt.path.string());
     if (!evt.associated) {
-        auto full = _local_home_dir / evt.path;
+        auto full = evt.path;
         if (!std::filesystem::exists(full)) {
             handleDeleted(evt);
         }
@@ -365,12 +406,16 @@ void LocalStorage::handleMoved(const FileEvent& evt) {
         return;
     }
 
-    auto full_new = _local_home_dir / evt.path;
-    auto full_old = _local_home_dir / evt.associated->path;
+    LOG_DEBUG("LocalStorage", "True moved: %s", evt.path.string());
+
+    auto full_old = evt.path;
+    auto full_new = evt.associated->path;
     auto new_rel = std::filesystem::relative(full_new, _local_home_dir);
     auto old_rel = std::filesystem::relative(full_old, _local_home_dir);
 
-    auto rec = _db->getFileByFileId(evt.file_id);
+    uint64_t file_id = this->getFileId(full_new);
+
+    auto rec = _db->getFileByFileId(file_id);
     if (!rec) {
         LOG_WARNING("LocalStorage", "Move of unknown file_id: %s", evt.path.string());
         handleCreated(*evt.associated.get());
@@ -435,11 +480,12 @@ void LocalStorage::handleCreated(const FileEvent& evt) {
         return;
     }
 
-    auto full = _local_home_dir / evt.path;
+    auto full = evt.path;
     auto rel = std::filesystem::relative(full, _local_home_dir);
     EntryType t = std::filesystem::is_directory(full) ? EntryType::Directory : (this->isDoc(full) ? EntryType::Document : EntryType::File);
     uint64_t hash = t != EntryType::Directory ? computeFileHash(full) : 0;
     uint64_t sz = t != EntryType::Directory ? std::filesystem::file_size(full) : 0;
+    
 
     auto dto = std::make_unique<FileRecordDTO>(
         t,
@@ -447,7 +493,7 @@ void LocalStorage::handleCreated(const FileEvent& evt) {
         sz,
         evt.when,
         hash,
-        evt.file_id
+        evt.file_id == 0 ? getFileId(full) : evt.file_id
     );
     auto ch = ChangeFactory::makeLocalNew(std::move(dto));
     _changes_queue.push(std::move(ch));
@@ -459,7 +505,7 @@ void LocalStorage::handleUpdated(const FileEvent& evt) {
         return;
     }
 
-    auto full = _local_home_dir / evt.path;
+    auto full = evt.path;
     auto rel = std::filesystem::relative(full, _local_home_dir);
 
     auto rec = _db->getFileByFileId(evt.file_id);

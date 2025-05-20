@@ -74,8 +74,6 @@ public:
 
     bool hasChanges() const override;
 
-    void setRawSignal(std::shared_ptr<RawSignal> raw_signal) override;
-
     void proccessAuth(const std::string& responce) override;
 
     std::string buildAuthURL(int local_port) const override;
@@ -87,6 +85,8 @@ public:
     std::string getDeltaToken() override;
 
     ~Dropbox() = default;
+
+    void setOnChange(std::function<void()> cb) override;
 
 private:
 
@@ -105,7 +105,7 @@ private:
 
     std::shared_ptr<Database> _db;
 
-    std::shared_ptr<RawSignal> _raw_signal;
+    std::function<void()> _onChange;
 
     std::time_t _access_token_expires;
 

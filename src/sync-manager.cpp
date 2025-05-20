@@ -251,9 +251,9 @@ SyncManager::SyncManager(
 {
     _db = std::make_shared<Database>(_db_file);
     _local_dir = local_dir;
-    loadConfig();
-
-    setRawSignal();
+    if (mode == Mode::InitialSync) {
+        loadConfig();
+    }
 }
 
 SyncManager::SyncManager(
@@ -294,10 +294,18 @@ void SyncManager::shutdown() {
 }
 
 void SyncManager::init() {
-    _num_clouds = _clouds.size();
-
     setupClouds();
-    setRawSignal();
+    
+    _clouds.emplace(0, _local);
+
+    for (auto& [cloud_id, cloud] : _clouds) {
+         cloud->setOnChange([this]() {
+             _signal_dirty.store(true, std::memory_order_release);
+             _signal_cv.notify_one();
+        });
+    }
+
+    ChangeFactory::initClouds(_clouds);
 
     HttpClient::get().setClouds(_clouds);
     CallbackDispatcher::get().setDB(_db_file);
@@ -354,53 +362,42 @@ void SyncManager::loadConfig() {
     CloudResolver::registerCloud(0, "LocalStorage");
 }
 
-void SyncManager::loadDBConfig() {
-    std::ifstream config_file(_config_path);
-    if (!config_file) {
-        throw std::runtime_error("Config file not found");
-    }
-    nlohmann::json config_json;
-    config_file >> config_json;
-    _cloud_configs = config_json["clouds"];
-}
-
 void SyncManager::setupClouds() {
-    for (const auto& cloud : _cloud_configs) {
-        std::string name = cloud["name"];
-        std::string type_str = cloud["type"];
+    auto clouds = _db->get_clouds();
+
+    for (auto& cloud : clouds) {
+        int cloud_id = cloud["config_id"];
+        std::string type_str = cloud["type"].get<std::string>();
         CloudProviderType type = cloud_type_from_string(type_str);
-        nlohmann::json cloud_data = cloud["data"];
+        nlohmann::json cloud_data = cloud["config_data"];
         std::filesystem::path cloud_home_path(cloud_data["dir"]);
-        int cloud_id = _db->add_cloud(name, type, cloud_data);
-        if (type == CloudProviderType::GoogleDrive) {
-            _clouds.emplace(
+
+        std::string client_id = cloud_data["client_id"].get<std::string>();
+        std::string client_secret = cloud_data["client_secret"].get<std::string>();
+        std::string refresh_token = cloud_data["refresh_token"].get<std::string>();
+        std::string delta_token = cloud_data["start_page_token"].get<std::string>();
+
+        _clouds.emplace(
+            cloud_id,
+            CloudFactory::create(
+                type,
+                client_id,
+                client_secret,
+                refresh_token,
+                cloud_home_path,
+                _local_dir,
+                _db,
                 cloud_id,
-                std::make_shared<GoogleDrive>(
-                    cloud_data["client_id"],
-                    cloud_data["client_secret"],
-                    cloud_data["refresh_token"],
-                    cloud_home_path,
-                    _local_dir,
-                    _db,
-                    cloud_id));
-            CloudResolver::registerCloud(cloud_id, "GoogleDrive");
-        }
-        else if (type == CloudProviderType::Dropbox) {
-            _clouds.emplace(
-                cloud_id,
-                std::make_shared<Dropbox>(
-                    cloud_data["client_id"],
-                    cloud_data["client_secret"],
-                    cloud_data["refresh_token"],
-                    cloud_home_path,
-                    _local_dir,
-                    _db,
-                    cloud_id));
-            CloudResolver::registerCloud(cloud_id, "Dropbox");
-        }
+                delta_token    
+            )
+        );
+        CloudResolver::registerCloud(cloud_id, to_cstr(type));
     }
+
+    _num_clouds = _clouds.size();
 
     _local = std::make_shared<LocalStorage>(_local_dir, 0, _db);
+    CloudResolver::registerCloud(0, "Local");
 }
 
 void SyncManager::setLocalDir(const std::string& path) {
@@ -975,10 +972,10 @@ void SyncManager::daemonMode() {
         throw std::runtime_error("Initial sync not completed. Please run initial sync first.");
     }
 
+    _local->startWatching();
+
     _polling_worker = std::make_unique<std::thread>(&SyncManager::pollingLoop, this);
     _changes_worker = std::make_unique<std::thread>(&SyncManager::proccessLoop, this);
-
-    _local->startWatching();
 }
 
 bool SyncManager::checkInitialSyncCompleted() {
@@ -994,7 +991,7 @@ void SyncManager::setupLocalHttpServer() {
 void SyncManager::proccessLoop() {
     std::unique_ptr<Change> change;
     while (_changes_buff.pop(change)) {
-
+        handleChange(std::move(change));
     }
 }
 
@@ -1004,15 +1001,17 @@ void SyncManager::pollingLoop() {
     auto next_flush = now + std::chrono::seconds(8);
 
     while (!_should_exit) {
-
-        std::unique_lock lk(_raw_signal->mtx);
-        _raw_signal->cv.wait_until(lk,
-            std::min(next_poll, next_flush),
-            [&] { return _should_exit || anyStorageHasRaw(); });
-        lk.unlock();
-
         now = std::chrono::steady_clock::now();
 
+        {
+            std::unique_lock lk(_signal_mtx);
+            _signal_cv.wait_until(
+                lk, next_poll,
+                [this] { return _should_exit
+                || _signal_dirty.exchange(false); });
+        }
+
+        now = std::chrono::steady_clock::now();
 
         if (now >= next_poll) {
             for (auto& [id, cloud] : _clouds) {
@@ -1020,7 +1019,7 @@ void SyncManager::pollingLoop() {
                     cloud->getChanges();
                 }
             }
-            next_poll = now + std::chrono::seconds(5);
+            next_poll = now + std::chrono::seconds(10);
         }
 
         for (auto& [id, cloud] : _clouds) {
@@ -1038,11 +1037,4 @@ bool SyncManager::anyStorageHasRaw() {
         }
     }
     return false;
-}
-
-
-void SyncManager::setRawSignal() {
-    for (auto& cloud : _clouds) {
-        cloud.second->setRawSignal(_raw_signal);
-    }
 }

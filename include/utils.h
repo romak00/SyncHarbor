@@ -15,6 +15,8 @@
 #include <condition_variable>
 #include <variant>
 #include <unordered_set>
+#include <semaphore>
+#include <ctime>
 
 
 class ActiveCount {
@@ -121,13 +123,22 @@ inline CloudProviderType cloud_type_from_string(std::string_view str) {
 }
 
 inline std::time_t convertCloudTime(std::string datetime) {
-    datetime.pop_back();
-    size_t dotPos = datetime.find('.');
-    datetime = datetime.substr(0, dotPos);
+    if (!datetime.empty() && datetime.back() == 'Z')
+        datetime.pop_back();
+    auto dotPos = datetime.find('.');
+    if (dotPos != std::string::npos)
+        datetime.resize(dotPos);
+
     std::tm tm = {};
     std::istringstream iss(datetime);
     iss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
+    tm.tm_isdst = 0;
+
+#if defined(_WIN32) || defined(_WIN64)
+    return _mkgmtime(&tm);
+#else
     return timegm(&tm);
+#endif
 }
 
 inline std::time_t convertSystemTime(const std::filesystem::path& path) {
@@ -354,8 +365,8 @@ private:
 };
 
 struct RawSignal {
-    std::mutex mtx;
-    std::condition_variable  cv;
+    std::binary_semaphore sem{ 0 };
+    std::atomic<bool>     dirty{ false };
 };
 
 class FileEvent {

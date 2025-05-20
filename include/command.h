@@ -96,6 +96,9 @@ public:
     void completionCallback(const std::unique_ptr<Database>& db, const std::shared_ptr<BaseStorage>& cloud) override {
         cloud->proccesUpload(_dto, "");
         for (auto& next_command : _next_commands) {
+            int cloud_id = next_command->getId();
+            _dto->cloud_parent_id = db->getCloudFileIdByPath(_dto->rel_path, cloud_id);
+            _dto->cloud_id = cloud_id;
             next_command->setDTO(std::make_unique<FileRecordDTO>(*_dto));
         }
         LOG_INFO("LOCAL UPLOAD", this->getTarget(), "completed");
@@ -141,6 +144,11 @@ public:
         db->update_file(*_dto);
 
         for (auto& next_command : _next_commands) {
+            int cloud_id = next_command->getId();
+            int global_id = _dto->global_id;
+            std::string cloud_file_id = db->get_cloud_file_id_by_cloud_id(cloud_id, global_id);
+            _dto->cloud_file_id = cloud_file_id;
+            _dto->cloud_id = cloud_id;
             next_command->setDTO(std::make_unique<FileUpdatedDTO>(*_dto));
         }
         LOG_INFO("LOCAL UPDATE", this->getTarget(), "completed");
@@ -180,15 +188,22 @@ public:
     void execute(const std::shared_ptr<BaseStorage>& cloud) override {}
 
     void completionCallback(const std::unique_ptr<Database>& db, const std::shared_ptr<BaseStorage>& cloud) override {
-        LOG_INFO("LOCAL UPDATE", this->getTarget(), "started");
+        LOG_INFO("LOCAL MOVE", this->getTarget(), "started");
 
         cloud->proccesMove(_dto, "");
         db->update_file(*_dto);
 
         for (auto& next_command : _next_commands) {
+            int cloud_id = next_command->getId();
+            int global_id = _dto->global_id;
+            auto cloud_dto = db->getFileByCloudIdAndGlobalId(cloud_id, global_id);
+            _dto->cloud_file_id = cloud_dto->cloud_file_id;
+            _dto->old_cloud_parent_id = cloud_dto->cloud_parent_id;
+            _dto->new_cloud_parent_id = db->getCloudFileIdByPath(_dto->new_rel_path, cloud_id);
+            _dto->cloud_id = cloud_id;
             next_command->setDTO(std::make_unique<FileMovedDTO>(*_dto));
         }
-        LOG_INFO("LOCAL UPDATE", this->getTarget(), "completed");
+        LOG_INFO("LOCAL MOVE", this->getTarget(), "completed");
 
         notifyFinished();
         continueChain();
@@ -226,6 +241,10 @@ public:
 
     void completionCallback(const std::unique_ptr<Database>& db, const std::shared_ptr<BaseStorage>& cloud) override {
         bool need_local_delete = (_dto->cloud_id != 0);
+
+        LOG_INFO("LOCAL MOVE", this->getTarget(), "started");
+
+        cloud->proccesDelete(_dto, "");
 
         for (auto& next_command : _next_commands) {
             int cloud_id = next_command->getId();

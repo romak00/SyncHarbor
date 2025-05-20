@@ -177,13 +177,15 @@ int main(int argc, char* argv[]) {
         config_name = argv[2];
     }
 
+    std::unique_ptr<SyncManager> sync_manager = nullptr;
+
     if (mode == "config") {
         if (config_name.empty()) {
             config_name = chooseOrCreateConfig();
         }
         std::cout << ">> Initial sync for config: " << config_name << "\n";
         std::string db_file = config_name + ".sqlite3";
-        std::unique_ptr<SyncManager> sync_manager = std::make_unique<SyncManager>(db_file, SyncManager::Mode::InitialSync);
+        sync_manager = std::make_unique<SyncManager>(db_file, SyncManager::Mode::InitialSync);
         configureLocalDirectory(sync_manager);
         configureClouds(sync_manager);
         std::cout << "Starting initial sync...\n";
@@ -207,21 +209,31 @@ int main(int argc, char* argv[]) {
         }
         std::string db_file = config_name + ".sqlite3";
         std::cout << ">> Running daemon for config: " << config_name << "\n";
-        std::unique_ptr<SyncManager> sync_manager = std::make_unique<SyncManager>(db_file, SyncManager::Mode::Daemon);
+        sync_manager = std::make_unique<SyncManager>(db_file, SyncManager::Mode::Daemon);
         sync_manager->run();
         return 0;
     }
-    else if (mode == "config-file") {
+    else if (mode == "config-file-initial") {
         if (config_name.empty()) {
             std::cerr << "Usage: " << argv[0] << " config-file <cfg.json>\n";
             return 1;
         }
-        std::unique_ptr<SyncManager> sync_manager =
+        sync_manager =
             std::make_unique<SyncManager>(config_name, config_name + ".sqlite3", "/home/rk00/demo", SyncManager::Mode::InitialSync);
 
         sync_manager->run();
         sync_manager->shutdown();
         return 0;
+    }
+    else if (mode == "config-file-daemon") {
+        if (config_name.empty()) {
+            std::cerr << "Usage: " << argv[0] << " config-file <cfg.json>\n";
+            return 1;
+        }
+        sync_manager =
+            std::make_unique<SyncManager>(config_name, config_name + ".sqlite3", "/home/rk00/demo", SyncManager::Mode::Daemon);
+
+        sync_manager->run();
     }
     else {
         std::cerr << "Unknown mode: " << mode << "\n";
@@ -231,7 +243,10 @@ int main(int argc, char* argv[]) {
     LOG_DEBUG("Main", "Waiting for Ctrl+C....");
     while (!g_should_exit.load())
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    }
+    if (sync_manager) {
+        sync_manager->shutdown();
     }
     LOG_DEBUG("Main", "Recieved SIGINGT. Shutting down...");
 }

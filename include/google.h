@@ -77,8 +77,6 @@ public:
 
     bool hasChanges() const override;
 
-    void setRawSignal(std::shared_ptr<RawSignal> raw_signal) override;
-
     std::string buildAuthURL(int local_port) const override;
 
     void getRefreshToken(const std::string& code, const int local_port) override;
@@ -88,6 +86,8 @@ public:
     std::string getDeltaToken() override;
 
     void ensureRootExists() override;
+
+    void setOnChange(std::function<void()> cb) override;
 private:
     std::optional<GoogleDocMimeInfo> getGoogleDocMimeByExtension(const std::filesystem::path& path) const;
         
@@ -105,14 +105,14 @@ private:
     std::string _home_dir_id;
     std::string _page_token;
 
-    ThreadSafeQueue<std::vector<std::string>> _events_buff;
+    ThreadSafeQueue<std::vector<nlohmann::json>> _events_buff;
     mutable ThreadSafeEventsregister _expected_events;
 
     std::unordered_map<std::string, std::unique_ptr<FileDeletedDTO>> _pending_deletes;
 
     std::shared_ptr<Database> _db;
 
-    std::shared_ptr<RawSignal> _raw_signal;
+    std::function<void()> _onChange;
 
     std::time_t _access_token_expires;
 
