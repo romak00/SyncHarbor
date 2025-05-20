@@ -1,3 +1,3 @@
 Requirements: libcurl, sqlite3
 
-Build: $./sctipts/mk.sh$ from project root dir
+Build: ``./sctipts/mk.s`` from project root dir
