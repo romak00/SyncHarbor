@@ -3,5 +3,3 @@ build*
 *.sqlite3*
 change.json
 *cloudsync*
-DatabaseTests
-LocalStorageTests
