@@ -1,5 +1,5 @@
 #include "CallbackDispatcher.h"
-#include "command.h"
+#include "commands.h"
 #include "logger.h"
 
 

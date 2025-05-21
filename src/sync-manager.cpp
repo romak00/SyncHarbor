@@ -565,7 +565,7 @@ void SyncManager::initialSync() {
         int cloud_id = best->cloud_id;
         if (!local_files_map.contains(path)) {
 
-            LOG_INFO("SyncManager", "  → NEW remote-only: %s", path.string().c_str());
+            LOG_INFO("SyncManager", "  -> NEW remote-only: %s", path.string().c_str());
 
             auto change = std::make_shared<Change>(
                 ChangeType::New,
@@ -577,7 +577,7 @@ void SyncManager::initialSync() {
             int cmds_count = 0;
             if (best->type == EntryType::Directory) {
 
-                LOG_DEBUG("SyncManager", "    Directory → LocalUploadCommand");
+                LOG_DEBUG("SyncManager", "    Directory -> LocalUploadCommand");
 
                 first_cmd = std::make_unique<LocalUploadCommand>(0);
                 auto dto_clone = std::make_unique<FileRecordDTO>(*best);
@@ -588,7 +588,7 @@ void SyncManager::initialSync() {
 
             else {
 
-                LOG_DEBUG("SyncManager", "    File → CloudDownloadNewCommand + LocalUploadCommand");
+                LOG_DEBUG("SyncManager", "    File -> CloudDownloadNewCommand + LocalUploadCommand");
 
                 first_cmd = std::make_unique<CloudDownloadNewCommand>(cloud_id);
                 auto dto_clone = std::make_unique<FileRecordDTO>(*best);
@@ -611,7 +611,7 @@ void SyncManager::initialSync() {
                 cloud_id
             );
 
-            LOG_INFO("SyncManager", "  → UPDATE remote-newer: %s", path.string().c_str());
+            LOG_INFO("SyncManager", "  -> UPDATE remote-newer: %s", path.string().c_str());
 
             auto first_cmd = std::make_unique<CloudDownloadUpdateCommand>(cloud_id);
             first_cmd->setOwner(change);
@@ -671,7 +671,7 @@ void SyncManager::initialSync() {
 
         if (std::filesystem::is_directory(rel_path)) {
 
-            LOG_DEBUG("SyncManager", "  Directory → uploading to missing clouds");
+            LOG_DEBUG("SyncManager", "  Directory -> uploading to missing clouds");
 
             std::shared_ptr<Change> change = nullptr;
             std::unique_ptr<ICommand> first_cmd = nullptr;
@@ -696,7 +696,7 @@ void SyncManager::initialSync() {
         }
         else {
 
-            LOG_DEBUG("SyncManager", "  File → upload/update to clouds");
+            LOG_DEBUG("SyncManager", "  File -> upload/update to clouds");
 
             auto change = std::make_shared<Change>(
                 ChangeType::New,

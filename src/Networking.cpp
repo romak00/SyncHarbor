@@ -1,5 +1,5 @@
 #include "Networking.h"
-#include "command.h"
+#include "commands.h"
 #include "logger.h"
 
 HttpClient::HttpClient()
@@ -170,7 +170,7 @@ void HttpClient::largeRequestsWorker() {
                     _large_active_count.decrement();
                 }
                 else if (http_code == 403 || http_code == 429 || http_code == 408 || http_code >= 500 && http_code < 600) {
-                    LOG_WARNING("HttpClient", "HTTP code %i, scheduling retry", http_code);
+                    LOG_WARNING("HttpClient", "Scheduling retry for reponcse: %s", _active_handles[easy]->getHandle()._response);
 
                     _active_handles[easy]->getHandle().scheduleRetry();
                     _delayed_requests.emplace_back(std::move(_active_handles[easy]));

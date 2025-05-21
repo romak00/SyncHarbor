@@ -70,6 +70,7 @@ add_library(cloudsync_core STATIC
   src/change.cpp
   src/http-server.cpp
   src/sync-manager.cpp
+  src/commands.cpp
 )
 
 target_include_directories(cloudsync_core

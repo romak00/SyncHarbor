@@ -850,7 +850,7 @@ std::vector<std::shared_ptr<Change>> GoogleDrive::proccessChanges() {
             }
 
             if (need_move && need_update) {
-                LOG_DEBUG("GoogleDrive", "  → emit MOVE+UPDATE for: \"%s\" → \"%s\"",
+                LOG_DEBUG("GoogleDrive", "  -> emit MOVE+UPDATE for: \"%s\" -> \"%s\"",
                     old_path.string().c_str(),
                     new_path.string().c_str());
 
@@ -871,7 +871,7 @@ std::vector<std::shared_ptr<Change>> GoogleDrive::proccessChanges() {
                 changes.push_back(std::move(move_ch));
             }
             else if (need_new) {
-                LOG_DEBUG("GoogleDrive", "  → emit NEW for: \"%s\"", rel_path.string().c_str());
+                LOG_DEBUG("GoogleDrive", "  -> emit NEW for: \"%s\"", rel_path.string().c_str());
                 auto dto = std::make_unique<FileRecordDTO>(
                     type, new_parent, rel_path, cloud_file_id,
                     size, mod_time, hash, _id
@@ -879,14 +879,14 @@ std::vector<std::shared_ptr<Change>> GoogleDrive::proccessChanges() {
                 changes.push_back(ChangeFactory::makeCloudNew(std::move(dto)));
             }
             else if (need_del) {
-                LOG_DEBUG("GoogleDrive", "  → emit DELETE for: \"%s\"", rel_path.string().c_str());
+                LOG_DEBUG("GoogleDrive", "  -> emit DELETE for: \"%s\"", rel_path.string().c_str());
                 auto dto = std::make_unique<FileDeletedDTO>(
                     rel_path, global_id, _id, cloud_file_id, mod_time
                 );
                 changes.push_back(ChangeFactory::makeDelete(std::move(dto)));
             }
             else if (need_move) {
-                LOG_DEBUG("GoogleDrive", "  → emit MOVE for: \"%s\" → \"%s\"",
+                LOG_DEBUG("GoogleDrive", "  -> emit MOVE for: \"%s\" -> \"%s\"",
                     old_path.string().c_str(),
                     new_path.string().c_str());
                 auto dto = std::make_unique<FileMovedDTO>(
@@ -896,7 +896,7 @@ std::vector<std::shared_ptr<Change>> GoogleDrive::proccessChanges() {
                 changes.push_back(ChangeFactory::makeCloudMove(std::move(dto)));
             }
             else if (need_update) {
-                LOG_DEBUG("GoogleDrive", "  → emit UPDATE for: \"%s\"", rel_path.string().c_str());
+                LOG_DEBUG("GoogleDrive", "  -> emit UPDATE for: \"%s\"", rel_path.string().c_str());
                 auto dto = std::make_unique<FileUpdatedDTO>(
                     type, global_id, _id,
                     cloud_file_id, hash, mod_time,

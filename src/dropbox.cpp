@@ -752,7 +752,7 @@ std::vector<std::shared_ptr<Change>> Dropbox::proccessChanges() {
 
             std::shared_ptr<Change> ch = nullptr;
             if (need_move && need_update) {
-                LOG_DEBUG("Dropbox", "  → emit MOVE+UPDATE for: \"%s\" → \"%s\"",
+                LOG_DEBUG("Dropbox", "  -> emit MOVE+UPDATE for: \"%s\" -> \"%s\"",
                     old_path.string().c_str(),
                     rel_path.string().c_str());
                 // MOVE
@@ -775,7 +775,7 @@ std::vector<std::shared_ptr<Change>> Dropbox::proccessChanges() {
                 ch->addDependent(std::move(updCh));
             }
             else if (need_new) {
-                LOG_DEBUG("Dropbox", "  → emit NEW for: \"%s\"", rel_path.string().c_str());
+                LOG_DEBUG("Dropbox", "  -> emit NEW for: \"%s\"", rel_path.string().c_str());
                 auto dto = std::make_unique<FileRecordDTO>(
                     type, rel_path,
                     cloud_file_id, size, mtime, hash, _id
@@ -783,7 +783,7 @@ std::vector<std::shared_ptr<Change>> Dropbox::proccessChanges() {
                 ch = ChangeFactory::makeCloudNew(std::move(dto));
             }
             else if (need_del) {
-                LOG_DEBUG("Dropbox", "  → emit DELETE for: \"%s\"", rel_path.string().c_str());
+                LOG_DEBUG("Dropbox", "  -> emit DELETE for: \"%s\"", rel_path.string().c_str());
                 auto dto = std::make_unique<FileDeletedDTO>(
                     rel_path, global_id, _id, cloud_file_id, mtime
                 );
@@ -791,7 +791,7 @@ std::vector<std::shared_ptr<Change>> Dropbox::proccessChanges() {
                 pending_deletes.emplace(rel_path, std::move(mb_del));
             }
             else if (need_move) {
-                LOG_DEBUG("Dropbox", "  → emit MOVE for: \"%s\" → \"%s\"",
+                LOG_DEBUG("Dropbox", "  -> emit MOVE for: \"%s\" -> \"%s\"",
                     old_path.string().c_str(),
                     rel_path.string().c_str());
                 auto dto = std::make_unique<FileMovedDTO>(
@@ -805,7 +805,7 @@ std::vector<std::shared_ptr<Change>> Dropbox::proccessChanges() {
                 ch = ChangeFactory::makeCloudMove(std::move(dto));
             }
             else if (need_update) {
-                LOG_DEBUG("GoogleDrive", "  → emit UPDATE for: \"%s\"", rel_path.string().c_str());
+                LOG_DEBUG("GoogleDrive", "  -> emit UPDATE for: \"%s\"", rel_path.string().c_str());
                 auto dto = std::make_unique<FileUpdatedDTO>(
                     type, global_id, _id, cloud_file_id,
                     hash, mtime, rel_path, /*newParent=*/"", size

@@ -633,6 +633,8 @@ public:
 
     void scheduleRetry() {
         const int BASE_DELAY = 1000;
+
+        _retry_count++;
         int delay = BASE_DELAY * (1 << (_retry_count + 1));
 
         if (_iofd.is_open()) {
@@ -641,8 +643,7 @@ public:
         }
 
         _response.clear();
-        _retry_count++;
-        if (_retry_count > 5) {
+        if (_retry_count > 6) {
             throw std::runtime_error("Too many retry attempts on a request");
         }
 
