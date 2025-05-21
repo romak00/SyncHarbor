@@ -43,7 +43,7 @@ public:
     void setupMoveHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileMovedDTO>& dto) const override;
 
     void getChanges() override;
-    std::vector<std::unique_ptr<Change>> proccessChanges() override;
+    std::vector<std::shared_ptr<Change>> proccessChanges() override;
 
     std::vector<std::unique_ptr<FileRecordDTO>> initialFiles() override;
 
@@ -87,7 +87,6 @@ public:
     ~Dropbox() = default;
 
     void setOnChange(std::function<void()> cb) override;
-
 private:
 
     bool isDropboxShortcutJsonFile(const std::filesystem::path& path) const;
@@ -101,7 +100,7 @@ private:
     std::string _page_token;
 
     ThreadSafeQueue<std::vector<std::string>> _events_buff;
-    mutable ThreadSafeEventsregister _expected_events;
+    mutable ThreadSafeEventsRegistry _expected_events;
 
     std::shared_ptr<Database> _db;
 

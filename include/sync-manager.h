@@ -41,7 +41,7 @@ public:
     std::vector<std::filesystem::path> checkLocalPermissions() const;
 
     void onChangeCompleted(const std::filesystem::path& path,
-        std::vector<std::unique_ptr<Change>>&& dependents);
+        std::vector<std::shared_ptr<Change>>&& dependents);
 
     void registerCloud(const std::string& cloud_name, const CloudProviderType type, const std::string& client_id, const std::string& client_secret, const std::filesystem::path& home_path);
 private:
@@ -69,7 +69,7 @@ private:
 
     void pollingLoop();
 
-    void handleChange(std::unique_ptr<Change> change);
+    void handleChange(std::shared_ptr<Change> change);
 
     bool ensureParentDirectories(const std::filesystem::path& path);
 
@@ -77,7 +77,7 @@ private:
 
     void ensureRootsExist();
 
-    void startChange(const std::filesystem::path& path, std::unique_ptr<Change> change);
+    void startChange(const std::filesystem::path& path, std::shared_ptr<Change> change);
 
     void refreshAccessTokens();
 
@@ -90,8 +90,8 @@ private:
     std::string _config_path;
     std::string _db_file;
 
-    std::unordered_map<std::filesystem::path, std::unique_ptr<Change>> _current_changes;
-    ThreadSafeQueue<std::unique_ptr<Change>> _changes_buff;
+    std::unordered_map<std::filesystem::path, std::shared_ptr<Change>> _current_changes;
+    ThreadSafeQueue<std::shared_ptr<Change>> _changes_buff;
 
     std::unordered_map<int, std::shared_ptr<BaseStorage>> _clouds;
     nlohmann::json _cloud_configs;

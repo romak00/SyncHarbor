@@ -31,7 +31,7 @@ public:
     std::vector<std::unique_ptr<FileRecordDTO>> initialFiles() override;
     void getChanges() override {}
 
-    std::vector<std::unique_ptr<Change>> proccessChanges() override;
+    std::vector<std::shared_ptr<Change>> proccessChanges() override;
 
     CloudProviderType getType() const override { return CloudProviderType::LocalStorage; }
 
@@ -71,29 +71,30 @@ public:
     uint64_t computeFileHash(const std::filesystem::path& path, uint64_t seed = 0) const;
     void onFsEvent(const wtr::event& e);
 
-    
+
     bool isDoc(const std::filesystem::path& path) const;
-    
+
     friend class LocalStorageTest;
-    
+
     void handleRenamed(const FileEvent& evt);
-    
+
     void handleDeleted(const FileEvent& evt);
     void handleUpdated(const FileEvent& evt);
     void handleCreated(const FileEvent& evt);
     void handleMoved(const FileEvent& evt);
-    
+
     std::time_t fromWatcherTime(const long long);
-    
+
     bool ignoreTmp(const std::filesystem::path& path);
 
     void setOnChange(std::function<void()> cb) override;
-
 private:
 
-    ThreadSafeQueue<std::unique_ptr<Change>> _changes_queue;
+    bool thatFileTmpExists(const std::filesystem::path& path);
+
+    ThreadSafeQueue<std::shared_ptr<Change>> _changes_queue;
     ThreadSafeQueue<FileEvent> _events_buff;
-    mutable ThreadSafeEventsregister _expected_events;
+    mutable ThreadSafeEventsRegistry _expected_events;
 
     std::unique_ptr<wtr::watcher::watch> _watcher;
 

@@ -295,21 +295,21 @@ void GoogleDrive::setupMoveHandle(const std::unique_ptr<RequestHandle>& handle, 
 
     curl_easy_setopt(handle->_curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(handle->_curl, CURLOPT_CUSTOMREQUEST, "PATCH");
-    
+
     nlohmann::json body;
     std::string old_name = dto->old_rel_path.filename().string();
     std::string new_name = dto->new_rel_path.filename().string();
-    
+
     if (old_name != new_name) {
         body["name"] = new_name;
     }
-    
+
     std::string body_str = body.dump();
     if (!body.empty()) {
         curl_easy_setopt(handle->_curl, CURLOPT_POSTFIELDS, body_str.c_str());
         handle->addHeaders("Content-Type: application/json");
     }
-    
+
     handle->addHeaders("Authorization: Bearer " + _access_token);
     handle->setCommonCURLOpt();
 
@@ -518,7 +518,7 @@ void GoogleDrive::setupUploadHandle(const std::unique_ptr<RequestHandle>& handle
             j["mimeType"] = cloud_mime;
         }
         else {
-            LOG_ERROR("GoogleDrive","Cannot determine cloud MIME type for document file: %s", dto->rel_path.c_str());
+            LOG_ERROR("GoogleDrive", "Cannot determine cloud MIME type for document file: %s", dto->rel_path.c_str());
         }
     }
 
@@ -539,7 +539,7 @@ void GoogleDrive::setupUploadHandle(const std::unique_ptr<RequestHandle>& handle
 
     curl_easy_setopt(handle->_curl, CURLOPT_MIMEPOST, handle->_mime);
     curl_easy_setopt(handle->_curl, CURLOPT_URL, "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,modifiedTime,md5Checksum,parents,parents");
-    
+
     handle->setCommonCURLOpt();
 
     _expected_events.add(dto->rel_path, ChangeType::New);
@@ -719,12 +719,14 @@ void GoogleDrive::setOnChange(std::function<void()> cb) {
     _onChange = std::move(cb);
 }
 
-std::vector<std::unique_ptr<Change>> GoogleDrive::proccessChanges() {
-    std::vector<std::unique_ptr<Change>> changes;
+std::vector<std::shared_ptr<Change>> GoogleDrive::proccessChanges() {
+    std::vector<std::shared_ptr<Change>> changes;
     std::vector<nlohmann::json> raw_pages;
 
     if (!_events_buff.try_pop(raw_pages))
         return changes;
+
+    PrevEventsRegistry old_expected(_expected_events.copyMap());
 
     std::unordered_map<std::string, std::filesystem::path> path_map;
     std::unordered_map<std::string, std::unique_ptr<FileRecordDTO>> maybe_new;
@@ -788,8 +790,6 @@ std::vector<std::unique_ptr<Change>> GoogleDrive::proccessChanges() {
                 new_path = old_path;
                 rel_path = old_path; // default for delete
 
-
-
                 if (!trashed) {
                     // Rename?
                     if (name != old_path.filename()) {
@@ -818,32 +818,42 @@ std::vector<std::unique_ptr<Change>> GoogleDrive::proccessChanges() {
                 && mod_time > link->cloud_file_modified_time
                 && hash != get<std::string>(link->cloud_hash_check_sum);
 
+            LOG_DEBUG("GoogleDrive",
+                "Eval change: old_path=\"%s\", new_path=\"%s\", new=%d, del=%d, move=%d, upd=%d",
+                old_path.string().c_str(),
+                new_path.string().c_str(),
+                (int)need_new, (int)need_del, (int)need_move, (int)need_update);
+
             if (need_new) {
-                if (_expected_events.check(rel_path, ChangeType::New)) {
+                if (old_expected.check(rel_path, ChangeType::New)) {
                     LOG_DEBUG("GoogleDrive", "Expected NEW: %s", jchange.dump().c_str());
                     continue;
                 }
             }
             if (need_del) {
-                if (_expected_events.check(cloud_file_id, ChangeType::Delete)) {
+                if (old_expected.check(cloud_file_id, ChangeType::Delete)) {
                     LOG_DEBUG("GoogleDrive", "Expected DELETE: %s", jchange.dump().c_str());
                     continue;
                 }
             }
             if (need_move) {
-                if (_expected_events.check(cloud_file_id, ChangeType::Move)) {
+                if (old_expected.check(cloud_file_id, ChangeType::Move)) {
                     LOG_DEBUG("GoogleDrive", "Expected MOVE: %s", jchange.dump().c_str());
                     continue;
                 }
             }
             if (need_update) {
-                if (_expected_events.check(cloud_file_id, ChangeType::Update)) {
+                if (old_expected.check(cloud_file_id, ChangeType::Update)) {
                     LOG_DEBUG("GoogleDrive", "Expected UPDATE: %s", jchange.dump().c_str());
                     continue;
                 }
             }
-            
+
             if (need_move && need_update) {
+                LOG_DEBUG("GoogleDrive", "  → emit MOVE+UPDATE for: \"%s\" → \"%s\"",
+                    old_path.string().c_str(),
+                    new_path.string().c_str());
+
                 auto m_dto = std::make_unique<FileMovedDTO>(
                     type, global_id, _id, cloud_file_id,
                     mod_time, old_path, new_path, old_parent, new_parent
@@ -861,6 +871,7 @@ std::vector<std::unique_ptr<Change>> GoogleDrive::proccessChanges() {
                 changes.push_back(std::move(move_ch));
             }
             else if (need_new) {
+                LOG_DEBUG("GoogleDrive", "  → emit NEW for: \"%s\"", rel_path.string().c_str());
                 auto dto = std::make_unique<FileRecordDTO>(
                     type, new_parent, rel_path, cloud_file_id,
                     size, mod_time, hash, _id
@@ -868,12 +879,16 @@ std::vector<std::unique_ptr<Change>> GoogleDrive::proccessChanges() {
                 changes.push_back(ChangeFactory::makeCloudNew(std::move(dto)));
             }
             else if (need_del) {
+                LOG_DEBUG("GoogleDrive", "  → emit DELETE for: \"%s\"", rel_path.string().c_str());
                 auto dto = std::make_unique<FileDeletedDTO>(
                     rel_path, global_id, _id, cloud_file_id, mod_time
                 );
                 changes.push_back(ChangeFactory::makeDelete(std::move(dto)));
             }
             else if (need_move) {
+                LOG_DEBUG("GoogleDrive", "  → emit MOVE for: \"%s\" → \"%s\"",
+                    old_path.string().c_str(),
+                    new_path.string().c_str());
                 auto dto = std::make_unique<FileMovedDTO>(
                     type, global_id, _id, cloud_file_id,
                     mod_time, old_path, new_path, old_parent, new_parent
@@ -881,6 +896,7 @@ std::vector<std::unique_ptr<Change>> GoogleDrive::proccessChanges() {
                 changes.push_back(ChangeFactory::makeCloudMove(std::move(dto)));
             }
             else if (need_update) {
+                LOG_DEBUG("GoogleDrive", "  → emit UPDATE for: \"%s\"", rel_path.string().c_str());
                 auto dto = std::make_unique<FileUpdatedDTO>(
                     type, global_id, _id,
                     cloud_file_id, hash, mod_time,

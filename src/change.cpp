@@ -86,7 +86,7 @@ Change& Change::operator=(Change&& other) noexcept {
     return *this;
 }
 
-void Change::setOnComplete(std::function<void(std::vector<std::unique_ptr<Change>>&& dependents)> cb) {
+void Change::setOnComplete(std::function<void(std::vector<std::shared_ptr<Change>>&& dependents)> cb) {
     std::lock_guard lk(_mtx);
     _on_complete = std::move(cb);
 }
@@ -98,18 +98,18 @@ void Change::onCommandCreated() noexcept {
 void Change::onCommandFinished() noexcept {
     if (_pending_cmds.fetch_sub(1, std::memory_order_acq_rel) == 1) {
         std::lock_guard lk(_mtx);
-    
+
         _status = Status::Completed;
         _on_complete(std::move(_dependents));
     }
 }
 
-void Change::addDependent(std::unique_ptr<Change> change) {
+void Change::addDependent(std::shared_ptr<Change> change) {
     std::lock_guard lk(_mtx);
     _dependents.emplace_back(std::move(change));
 }
 
-std::time_t Change::getTime() const{
+std::time_t Change::getTime() const {
     return _change_time;
 }
 
@@ -149,7 +149,7 @@ void Change::onCancel() noexcept {
 }
 
 void Change::setCmdChain(std::vector<std::unique_ptr<ICommand>> cmds) {
-    _cmd_chain= std::move(cmds);
+    _cmd_chain = std::move(cmds);
 }
 void Change::setCmdChain(std::unique_ptr<ICommand> cmd) {
     _cmd_chain.push_back(std::move(cmd));

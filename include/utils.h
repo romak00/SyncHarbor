@@ -17,6 +17,7 @@
 #include <unordered_set>
 #include <semaphore>
 #include <ctime>
+#include <iterator>
 
 
 class ActiveCount {
@@ -322,6 +323,18 @@ enum class ChangeType : uint8_t {
     Rename = 1 << 3,
     Delete = 1 << 4
 };
+
+inline std::string to_string(ChangeType ch) {
+    switch (ch)
+    {
+    case ChangeType::New: return "New";
+    case ChangeType::Rename: return "Rename";
+    case ChangeType::Update: return "Update";
+    case ChangeType::Move: return "Move";
+    case ChangeType::Delete: return "Delete";
+    default: return "Null";
+    }
+}
 
 inline ChangeType operator|(ChangeType a, ChangeType b) {
     return static_cast<ChangeType>(
@@ -822,11 +835,11 @@ private:
 };
 
 
-class ThreadSafeEventsregister {
+class ThreadSafeEventsRegistry {
 public:
 
-    ThreadSafeEventsregister() = default;
-    ~ThreadSafeEventsregister() = default;
+    ThreadSafeEventsRegistry() = default;
+    ~ThreadSafeEventsRegistry() = default;
 
     void add(const std::string& path, ChangeType ct) {
         std::lock_guard<std::mutex> lock(_mutex);
@@ -842,8 +855,40 @@ public:
         return false;
     }
 
+    std::unordered_map<std::string, ChangeType> copyMap() {
+        std::lock_guard<std::mutex> lock(_mutex);
+        auto map = _map;
+        _map.clear();
+        return map;
+    }
+
 
 private:
     std::unordered_map<std::string, ChangeType> _map;
     std::mutex _mutex;
+};
+
+class PrevEventsRegistry {
+public:
+
+    PrevEventsRegistry(const std::unordered_map<std::string, ChangeType>& map) : _map(map)
+    {
+    }
+
+    ~PrevEventsRegistry() = default;
+
+    void add(const std::string& path, ChangeType ct) {
+        _map.emplace(path, ct);
+    }
+
+    bool check(const std::string& path, ChangeType ct) {
+        if (_map.contains(path) && _map[path] == ct) {
+            _map.erase(path);
+            return true;
+        }
+        return false;
+    }
+
+private:
+    std::unordered_map<std::string, ChangeType> _map;
 };

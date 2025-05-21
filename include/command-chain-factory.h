@@ -13,6 +13,6 @@ class CommandChainFactory {
         auto dto = std::make_unique<DTO>(std::forward<Args>(dto_args)...);
         auto cmd = std::make_unique<Command>(cloud_id);
         cmd->setDTO(std::move(dto));
-        return std::make_unique<Change>(change_flags, time, std::move(cmd));
+        return std::make_shared<Change>(change_flags, time, std::move(cmd));
     }
 };

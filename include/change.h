@@ -38,11 +38,11 @@ public:
     Change& operator=(const Change&) = delete;
     Change& operator=(Change&& other) noexcept;
 
-    void setOnComplete(std::function<void(std::vector<std::unique_ptr<Change>>&& dependents)> cb);
+    void setOnComplete(std::function<void(std::vector<std::shared_ptr<Change>>&& dependents)> cb);
     void onCommandCreated() noexcept;
     void onCommandFinished() noexcept;
     void onCancel() noexcept;
-    void addDependent(std::unique_ptr<Change> change);
+    void addDependent(std::shared_ptr<Change> change);
     std::time_t getTime() const;
     std::filesystem::path getTargetPath() const;
     ChangeType getType() const;
@@ -54,10 +54,10 @@ public:
     void setCmdChain(std::vector<std::unique_ptr<ICommand>> cmds);
 
 private:
-    std::vector<std::unique_ptr<Change>> _dependents;
+    std::vector<std::shared_ptr<Change>> _dependents;
     std::vector<std::unique_ptr<ICommand>> _cmd_chain;
     std::filesystem::path _target_path;
-    std::function<void(std::vector<std::unique_ptr<Change>>&& dependents)> _on_complete;
+    std::function<void(std::vector<std::shared_ptr<Change>>&& dependents)> _on_complete;
     std::atomic<int> _pending_cmds;
     std::time_t _change_time;
     int _cloud_id;

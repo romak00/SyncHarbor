@@ -5,6 +5,7 @@
 #include "CallbackDispatcher.h"
 #include "logger.h"
 
+class Change;
 
 class ICommand {
 public:
@@ -30,19 +31,20 @@ public:
         return false;
     }
 
-    void setChangeCallbacks(std::function<void()> on_created_cb, std::function<void()> on_finished_cb, std::function<void()> on_failed_cb) {
-        on_created_cb();
-        _onFinished = std::move(on_finished_cb);
-        _onFailed = std::move(on_failed_cb);
+    void setOwner(std::weak_ptr<Change> ow) noexcept {
+        _owner = std::move(ow);
+        if (auto ch = owner()){
+            ch->onCommandCreated();
+        }
     }
 
 protected:
-    void notifyFinished() noexcept { if (_onFinished) _onFinished(); }
-    void notifyFailed()   noexcept { if (_onFailed)   _onFailed(); }
+    std::shared_ptr<Change> owner() const noexcept {
+        return _owner.lock();
+    }
 
 private:
-    std::function<void()> _onFinished;
-    std::function<void()> _onFailed;
+    std::weak_ptr<Change> _owner;
 };
 
 class ChainedCommand : public ICommand {
@@ -103,7 +105,9 @@ public:
         }
         LOG_INFO("LOCAL UPLOAD", this->getTarget(), "completed");
 
-        notifyFinished();
+        if (auto ch = owner()) {
+            ch->onCommandFinished();
+        }
         continueChain();
     }
     void setDTO(std::unique_ptr<FileRecordDTO> dto) override {
@@ -153,7 +157,9 @@ public:
         }
         LOG_INFO("LOCAL UPDATE", this->getTarget(), "completed");
 
-        notifyFinished();
+        if (auto ch = owner()) {
+            ch->onCommandFinished();
+        }
         continueChain();
     }
     void setDTO(std::unique_ptr<FileUpdatedDTO> dto) override {
@@ -191,7 +197,6 @@ public:
         LOG_INFO("LOCAL MOVE", this->getTarget(), "started");
 
         cloud->proccesMove(_dto, "");
-        db->update_file(*_dto);
 
         for (auto& next_command : _next_commands) {
             int cloud_id = next_command->getId();
@@ -205,7 +210,9 @@ public:
         }
         LOG_INFO("LOCAL MOVE", this->getTarget(), "completed");
 
-        notifyFinished();
+        if (auto ch = owner()) {
+            ch->onCommandFinished();
+        }
         continueChain();
     }
     void setDTO(std::unique_ptr<FileMovedDTO> dto) override {
@@ -261,7 +268,9 @@ public:
         db->delete_file_and_links(_dto->global_id);
         LOG_INFO("LOCAL DELETE", this->getTarget(), "completed");
 
-        notifyFinished();
+        if (auto ch = owner()) {
+            ch->onCommandFinished();
+        }
         continueChain();
     }
 
@@ -306,7 +315,9 @@ public:
             next_command->setDTO(std::make_unique<FileRecordDTO>(*_dto));
         }
 
-        notifyFinished();
+        if (auto ch = owner()) {
+            ch->onCommandFinished();
+        }
         continueChain();
     }
 
@@ -360,7 +371,9 @@ public:
             next_command->setDTO(std::make_unique<FileUpdatedDTO>(*_dto));
         }
 
-        notifyFinished();
+        if (auto ch = owner()) {
+            ch->onCommandFinished();
+        }
         continueChain();
     }
 
@@ -403,18 +416,20 @@ public:
         _handle = std::make_unique<RequestHandle>();
         cloud->setupMoveHandle(_handle, _dto);
 
-        LOG_INFO("CLOUD UPDATE", "Started for entry: %s on: %s", this->getTarget(), CloudResolver::getName(_cloud_id));
+        LOG_INFO("CLOUD MOVE", "Started for entry: %s on: %s", this->getTarget(), CloudResolver::getName(_cloud_id));
     }
 
     void completionCallback(const std::unique_ptr<Database>& db, const std::shared_ptr<BaseStorage>& cloud) override {
         cloud->proccesMove(_dto, _handle->_response);
         db->update_file_link(*_dto);
-        LOG_INFO("CLOUD UPDATE", "Completed for entry: %s on: %s", this->getTarget(), CloudResolver::getName(_cloud_id));
+        LOG_INFO("CLOUD MOVE", "Completed for entry: %s on: %s", this->getTarget(), CloudResolver::getName(_cloud_id));
         for (auto& next_command : _next_commands) {
             next_command->setDTO(std::make_unique<FileMovedDTO>(*_dto));
         }
 
-        notifyFinished();
+        if (auto ch = owner()) {
+            ch->onCommandFinished();
+        }
         continueChain();
     }
 
@@ -465,7 +480,9 @@ public:
             next_command->setDTO(std::make_unique<FileRecordDTO>(*_dto));
         }
 
-        notifyFinished();
+        if (auto ch = owner()) {
+            ch->onCommandFinished();
+        }
         continueChain();
     }
 
@@ -517,7 +534,9 @@ public:
             next_command->setDTO(std::make_unique<FileUpdatedDTO>(*_dto));
         }
 
-        notifyFinished();
+        if (auto ch = owner()) {
+            ch->onCommandFinished();
+          }
         continueChain();
     }
 
@@ -570,7 +589,9 @@ public:
             next_command->setDTO(std::make_unique<FileDeletedDTO>(*_dto));
         }
 
-        notifyFinished();
+        if (auto ch = owner()) {
+            ch->onCommandFinished();
+        }
         continueChain();
     }
 

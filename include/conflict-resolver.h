@@ -4,6 +4,6 @@
 
 class ConflictResolver {
 public:
-    static std::vector<std::unique_ptr<Change>>
-        resolve(std::unique_ptr<Change> existing, std::unique_ptr<Change> incoming);
+    static std::vector<std::shared_ptr<Change>>
+        resolve(std::shared_ptr<Change> existing, std::shared_ptr<Change> incoming);
 };

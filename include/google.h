@@ -54,7 +54,7 @@ public:
 
     std::vector<std::unique_ptr<FileRecordDTO>> initialFiles() override;
 
-    std::vector<std::unique_ptr<Change>> proccessChanges() override;
+    std::vector<std::shared_ptr<Change>> proccessChanges() override;
 
     std::vector<std::unique_ptr<FileRecordDTO>> createPath(const std::filesystem::path& path, const std::filesystem::path& missing) override;
 
@@ -90,7 +90,7 @@ public:
     void setOnChange(std::function<void()> cb) override;
 private:
     std::optional<GoogleDocMimeInfo> getGoogleDocMimeByExtension(const std::filesystem::path& path) const;
-        
+
     bool ignoreTmp(const std::string& name);
 
     std::unordered_map<std::string, std::string> _dir_id_map;
@@ -106,7 +106,7 @@ private:
     std::string _page_token;
 
     ThreadSafeQueue<std::vector<nlohmann::json>> _events_buff;
-    mutable ThreadSafeEventsregister _expected_events;
+    mutable ThreadSafeEventsRegistry _expected_events;
 
     std::unordered_map<std::string, std::unique_ptr<FileDeletedDTO>> _pending_deletes;
 

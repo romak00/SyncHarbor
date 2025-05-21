@@ -44,7 +44,7 @@ public:
 
     virtual void setOnChange(std::function<void()> cb) = 0;
 
-    virtual std::vector<std::unique_ptr<Change>> proccessChanges() = 0;
+    virtual std::vector<std::shared_ptr<Change>> proccessChanges() = 0;
 
     virtual void ensureRootExists() = 0;
 };

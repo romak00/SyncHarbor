@@ -89,7 +89,7 @@ void Dropbox::setupUploadHandle(const std::unique_ptr<RequestHandle>& handle, co
 
     std::string dropbox_api_arg = j.dump();
     handle->addHeaders("Dropbox-API-Arg: " + dropbox_api_arg);
-    
+
     if (dto->type == EntryType::Document && this->isDropboxShortcutJsonFile(dto->rel_path)) {
         handle->addHeaders("Content-Type: application/json");
     }
@@ -157,7 +157,7 @@ void Dropbox::setupUpdateHandle(const std::unique_ptr<RequestHandle>& handle, co
     std::string url = "https://content.dropboxapi.com/2/files/upload";
     curl_easy_setopt(handle->_curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(handle->_curl, CURLOPT_POST, 1L);
-    
+
     nlohmann::json j;
     j["path"] = "/" + dto->rel_path.string();
     j["mode"] = "overwrite";
@@ -165,7 +165,7 @@ void Dropbox::setupUpdateHandle(const std::unique_ptr<RequestHandle>& handle, co
     j["strict_conflict"] = false;
 
     std::string api_arg = j.dump();
-    
+
     if (dto->type == EntryType::Document && this->isDropboxShortcutJsonFile(dto->rel_path)) {
         handle->addHeaders("Content-Type: application/json");
     }
@@ -175,7 +175,7 @@ void Dropbox::setupUpdateHandle(const std::unique_ptr<RequestHandle>& handle, co
 
     handle->addHeaders("Authorization: Bearer " + _access_token);
     handle->addHeaders("Dropbox-API-Arg: " + api_arg);
-    
+
     handle->setFileStream(file_path.string(), std::ios::in);
     handle->setCommonCURLOpt();
 
@@ -213,6 +213,7 @@ void Dropbox::setupMoveHandle(const std::unique_ptr<RequestHandle>& handle, cons
     handle->addHeaders("Content-Type: application/json");
     handle->setCommonCURLOpt();
 
+    _expected_events.add(dto->old_rel_path, ChangeType::Delete);
     _expected_events.add(dto->cloud_file_id, ChangeType::Move);
 }
 
@@ -330,7 +331,7 @@ void Dropbox::setupDeleteHandle(const std::unique_ptr<RequestHandle>& handle, co
     handle->addHeaders("Content-Type: application/json");
     handle->setCommonCURLOpt();
 
-    _expected_events.add(dto->cloud_file_id, ChangeType::Delete);
+    _expected_events.add(dto->rel_path, ChangeType::Delete);
 }
 
 std::vector<std::unique_ptr<FileRecordDTO>> Dropbox::initialFiles() {
@@ -363,7 +364,7 @@ std::vector<std::unique_ptr<FileRecordDTO>> Dropbox::initialFiles() {
     HttpClient::get().syncRequest(handle);
     auto rsp = nlohmann::json::parse(handle->_response);
 
-    auto process_entries = [&](const nlohmann::json& entries) {
+    auto proccess_entries = [&](const nlohmann::json& entries) {
         for (auto& e : entries) {
             bool is_folder = (e[".tag"] == "folder");
             bool is_doc = !e.value("is_downloadable", true);
@@ -397,7 +398,7 @@ std::vector<std::unique_ptr<FileRecordDTO>> Dropbox::initialFiles() {
         }
         };
 
-    process_entries(rsp["entries"]);
+    proccess_entries(rsp["entries"]);
 
     bool has_more = rsp.value("has_more", false);
     std::string cursor = rsp.value("cursor", "");
@@ -415,7 +416,7 @@ std::vector<std::unique_ptr<FileRecordDTO>> Dropbox::initialFiles() {
         auto cont_rsp = nlohmann::json::parse(handle->_response);
 
         LOG_DEBUG("Dropbox", "continue response: %s", handle->_response.c_str());
-        process_entries(cont_rsp["entries"]);
+        proccess_entries(cont_rsp["entries"]);
 
         has_more = cont_rsp.value("has_more", false);
         cursor = cont_rsp.value("cursor", "");
@@ -671,12 +672,16 @@ void Dropbox::setOnChange(std::function<void()> cb) {
     _onChange = std::move(cb);
 }
 
-std::vector<std::unique_ptr<Change>> Dropbox::proccessChanges() {
-    std::vector<std::unique_ptr<Change>> changes;
+std::vector<std::shared_ptr<Change>> Dropbox::proccessChanges() {
+    std::vector<std::shared_ptr<Change>> changes;
     std::vector<std::string> pages;
+
+    std::unordered_map<std::string, std::shared_ptr<Change>> pending_deletes;
 
     if (!_events_buff.try_pop(pages))
         return changes;
+
+    PrevEventsRegistry old_expected(_expected_events.copyMap());
 
     for (const auto& raw : pages) {
         auto j = nlohmann::json::parse(raw);
@@ -686,75 +691,91 @@ std::vector<std::unique_ptr<Change>> Dropbox::proccessChanges() {
             bool is_doc = !entry.value("is_downloadable", true);
             std::string cloud_file_id = entry.value("id", std::string{});
 
-            std::string path = entry.value("path_display", std::string{});
-            if (!path.empty() && path.front() == '/')
-                path.erase(0, 1);
-            std::filesystem::path rel_path = path;
+            std::string path_str = entry.value("path_display", std::string{});
+            std::filesystem::path path = path_str;
+            std::filesystem::path rel_path = std::filesystem::relative(path, _home_path);
 
             if (rel_path.empty() || rel_path == std::filesystem::path(".")) {
                 continue;
             }
 
+            if (cloud_file_id == "") {
+                cloud_file_id = _db->getCloudFileIdByPath(rel_path, _id);
+            }
+
             std::time_t mtime = 0;
-            uint64_t size     = 0;
+            uint64_t size = 0;
             std::string hash;
 
             if (tag != "deleted" && !is_dir) {
                 mtime = convertCloudTime(entry.value("server_modified", std::string{}));
-                size  = entry.value("size", 0ULL);
-                hash  = entry.value("content_hash", std::string{});
+                size = entry.value("size", 0ULL);
+                hash = entry.value("content_hash", std::string{});
             }
 
             EntryType type = is_dir ? EntryType::Directory : (is_doc ? EntryType::Document : EntryType::File);
 
-            auto link      = _db->getFileByCloudIdAndCloudFileId(_id, cloud_file_id);
-            int  global_id  = link ? link->global_id : 0;
-            auto old_path   = link ? _db->getPathByGlobalId(global_id) : std::filesystem::path{};
-            bool existed   = (link != nullptr);
+            auto link = _db->getFileByCloudIdAndCloudFileId(_id, cloud_file_id);
+            int  global_id = link ? link->global_id : 0;
+            auto old_path = link ? _db->getPathByGlobalId(global_id) : std::filesystem::path{};
+            bool existed = (link != nullptr);
 
-            bool need_new    = !existed && tag != "deleted";
-            bool need_del    =  existed && tag == "deleted";
-            bool need_move   =  existed && tag != "deleted" && rel_path != old_path;
-            bool need_update =  existed && !is_dir && tag != "deleted"
-                             && mtime > link->cloud_file_modified_time
-                             && hash != get<std::string>(link->cloud_hash_check_sum);
+            bool need_new = !existed && tag != "deleted";
+            bool need_del = existed && tag == "deleted";
+            bool need_move = existed && tag != "deleted" && rel_path != old_path;
+            bool need_update = existed && !is_dir && tag != "deleted"
+                && mtime > link->cloud_file_modified_time
+                && hash != get<std::string>(link->cloud_hash_check_sum);
 
-            if (need_new && _expected_events.check(rel_path, ChangeType::New)) {
+            LOG_DEBUG("Dropbox",
+                "Eval change: old_path=\"%s\", new_path=\"%s\", new=%d, del=%d, move=%d, upd=%d",
+                old_path.string().c_str(),
+                rel_path.string().c_str(),
+                (int)need_new, (int)need_del, (int)need_move, (int)need_update);
+
+            if (need_new && old_expected.check(rel_path, ChangeType::New)) {
                 LOG_DEBUG("Dropbox", "Expected NEW: %s", raw.c_str());
                 continue;
             }
-            if (need_del && _expected_events.check(cloud_file_id, ChangeType::Delete)) {
+            if (need_del && old_expected.check(rel_path, ChangeType::Delete)) {
                 LOG_DEBUG("Dropbox", "Expected DELETE: %s", raw.c_str());
                 continue;
             }
-            if (need_move && _expected_events.check(cloud_file_id, ChangeType::Move)) {
+            if (need_move && old_expected.check(cloud_file_id, ChangeType::Move)) {
                 LOG_DEBUG("Dropbox", "Expected MOVE: %s", raw.c_str());
                 continue;
             }
-            if (need_update && _expected_events.check(cloud_file_id, ChangeType::Update)) {
+            if (need_update && old_expected.check(cloud_file_id, ChangeType::Update)) {
                 LOG_DEBUG("Dropbox", "Expected UPDATE: %s", raw.c_str());
                 continue;
             }
 
-            std::unique_ptr<Change> ch;
+            std::shared_ptr<Change> ch = nullptr;
             if (need_move && need_update) {
+                LOG_DEBUG("Dropbox", "  → emit MOVE+UPDATE for: \"%s\" → \"%s\"",
+                    old_path.string().c_str(),
+                    rel_path.string().c_str());
                 // MOVE
-                auto mDto = std::make_unique<FileMovedDTO>(
+                auto m_dto = std::make_unique<FileMovedDTO>(
                     type, global_id, _id, cloud_file_id,
                     mtime, old_path, rel_path,
                     /*oldParent=*/"", /*newParent=*/""
                 );
-                ch = ChangeFactory::makeCloudMove(std::move(mDto));
+                if (pending_deletes.contains(rel_path)) {
+                    pending_deletes.erase(rel_path);
+                }
+                ch = ChangeFactory::makeCloudMove(std::move(m_dto));
 
                 // UPDATE as dependent
-                auto uDto = std::make_unique<FileUpdatedDTO>(
+                auto u_dto = std::make_unique<FileUpdatedDTO>(
                     type, global_id, _id, cloud_file_id,
                     hash, mtime, rel_path, /*newParent=*/"", size
                 );
-                auto updCh = ChangeFactory::makeCloudUpdate(std::move(uDto));
+                auto updCh = ChangeFactory::makeCloudUpdate(std::move(u_dto));
                 ch->addDependent(std::move(updCh));
             }
             else if (need_new) {
+                LOG_DEBUG("Dropbox", "  → emit NEW for: \"%s\"", rel_path.string().c_str());
                 auto dto = std::make_unique<FileRecordDTO>(
                     type, rel_path,
                     cloud_file_id, size, mtime, hash, _id
@@ -762,20 +783,29 @@ std::vector<std::unique_ptr<Change>> Dropbox::proccessChanges() {
                 ch = ChangeFactory::makeCloudNew(std::move(dto));
             }
             else if (need_del) {
+                LOG_DEBUG("Dropbox", "  → emit DELETE for: \"%s\"", rel_path.string().c_str());
                 auto dto = std::make_unique<FileDeletedDTO>(
                     rel_path, global_id, _id, cloud_file_id, mtime
                 );
-                ch = ChangeFactory::makeDelete(std::move(dto));
+                auto mb_del = ChangeFactory::makeDelete(std::move(dto));
+                pending_deletes.emplace(rel_path, std::move(mb_del));
             }
             else if (need_move) {
+                LOG_DEBUG("Dropbox", "  → emit MOVE for: \"%s\" → \"%s\"",
+                    old_path.string().c_str(),
+                    rel_path.string().c_str());
                 auto dto = std::make_unique<FileMovedDTO>(
                     type, global_id, _id, cloud_file_id,
                     mtime, old_path, rel_path,
                     /*oldParent=*/"", /*newParent=*/""
                 );
+                if (pending_deletes.contains(rel_path)) {
+                    pending_deletes.erase(rel_path);
+                }
                 ch = ChangeFactory::makeCloudMove(std::move(dto));
             }
             else if (need_update) {
+                LOG_DEBUG("GoogleDrive", "  → emit UPDATE for: \"%s\"", rel_path.string().c_str());
                 auto dto = std::make_unique<FileUpdatedDTO>(
                     type, global_id, _id, cloud_file_id,
                     hash, mtime, rel_path, /*newParent=*/"", size
@@ -787,6 +817,9 @@ std::vector<std::unique_ptr<Change>> Dropbox::proccessChanges() {
                 changes.emplace_back(std::move(ch));
             }
         }
+    }
+    for (auto& [path, del] : pending_deletes) {
+        changes.emplace_back(std::move(del));
     }
 
     return changes;

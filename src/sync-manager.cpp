@@ -295,14 +295,14 @@ void SyncManager::shutdown() {
 
 void SyncManager::init() {
     setupClouds();
-    
+
     _clouds.emplace(0, _local);
 
     for (auto& [cloud_id, cloud] : _clouds) {
-         cloud->setOnChange([this]() {
-             _signal_dirty.store(true, std::memory_order_release);
-             _signal_cv.notify_one();
-        });
+        cloud->setOnChange([this]() {
+            _signal_dirty.store(true, std::memory_order_release);
+            _signal_cv.notify_one();
+            });
     }
 
     ChangeFactory::initClouds(_clouds);
@@ -388,7 +388,7 @@ void SyncManager::setupClouds() {
                 _local_dir,
                 _db,
                 cloud_id,
-                delta_token    
+                delta_token
             )
         );
         CloudResolver::registerCloud(cloud_id, to_cstr(type));
@@ -567,7 +567,7 @@ void SyncManager::initialSync() {
 
             LOG_INFO("SyncManager", "  → NEW remote-only: %s", path.string().c_str());
 
-            auto change = std::make_unique<Change>(
+            auto change = std::make_shared<Change>(
                 ChangeType::New,
                 path,
                 std::time_t(nullptr),
@@ -582,7 +582,7 @@ void SyncManager::initialSync() {
                 first_cmd = std::make_unique<LocalUploadCommand>(0);
                 auto dto_clone = std::make_unique<FileRecordDTO>(*best);
                 first_cmd->setDTO(std::move(dto_clone));
-                ChangeFactory::attachChangeCallbacks(change.get(), first_cmd.get());
+                first_cmd->setOwner(change);
                 change->setCmdChain(std::move(first_cmd));
             }
 
@@ -593,9 +593,9 @@ void SyncManager::initialSync() {
                 first_cmd = std::make_unique<CloudDownloadNewCommand>(cloud_id);
                 auto dto_clone = std::make_unique<FileRecordDTO>(*best);
                 first_cmd->setDTO(std::move(dto_clone));
-                ChangeFactory::attachChangeCallbacks(change.get(), first_cmd.get());
+                first_cmd->setOwner(change);
                 auto next_cmd = std::make_unique<LocalUploadCommand>(0);
-                ChangeFactory::attachChangeCallbacks(change.get(), next_cmd.get());
+                next_cmd->setOwner(change);
                 first_cmd->addNext(std::move(next_cmd));
                 change->setCmdChain(std::move(first_cmd));
             }
@@ -604,7 +604,7 @@ void SyncManager::initialSync() {
             local_files_map.emplace(path, std::make_unique<FileRecordDTO>(*best));
         }
         else if (std::filesystem::is_regular_file(_local_dir / path) && local_files_map[path]->cloud_file_modified_time < best->cloud_file_modified_time) {
-            auto change = std::make_unique<Change>(
+            auto change = std::make_shared<Change>(
                 ChangeType::Update,
                 path,
                 std::time_t(nullptr),
@@ -614,7 +614,7 @@ void SyncManager::initialSync() {
             LOG_INFO("SyncManager", "  → UPDATE remote-newer: %s", path.string().c_str());
 
             auto first_cmd = std::make_unique<CloudDownloadUpdateCommand>(cloud_id);
-            ChangeFactory::attachChangeCallbacks(change.get(), first_cmd.get());
+            first_cmd->setOwner(change);
 
             auto new_dto = std::make_unique<FileUpdatedDTO>(
                 best->type,
@@ -630,7 +630,7 @@ void SyncManager::initialSync() {
 
             first_cmd->setDTO(std::move(new_dto));
             auto next_cmd = std::make_unique<LocalUpdateCommand>(0);
-            ChangeFactory::attachChangeCallbacks(change.get(), next_cmd.get());
+            next_cmd->setOwner(change);
             first_cmd->addNext(std::move(next_cmd));
             change->setCmdChain(std::move(first_cmd));
 
@@ -672,15 +672,15 @@ void SyncManager::initialSync() {
         if (std::filesystem::is_directory(rel_path)) {
 
             LOG_DEBUG("SyncManager", "  Directory → uploading to missing clouds");
-            
-            std::unique_ptr<Change> change = nullptr;
-            std::unique_ptr<ICommand> first_cmd  = nullptr;
+
+            std::shared_ptr<Change> change = nullptr;
+            std::unique_ptr<ICommand> first_cmd = nullptr;
             int cmds_count = 0;
             for (const auto& [cloud_id, have] : have_it_or_not) {
                 if (!have) {
                     auto dto_clone = std::make_unique<FileRecordDTO>(*local_dto);
                     first_cmd = std::make_unique<CloudUploadCommand>(cloud_id);
-                    change = std::make_unique<Change>(
+                    change = std::make_shared<Change>(
                         ChangeType::New,
                         rel_path,
                         std::time_t(nullptr),
@@ -698,7 +698,7 @@ void SyncManager::initialSync() {
 
             LOG_DEBUG("SyncManager", "  File → upload/update to clouds");
 
-            auto change = std::make_unique<Change>(
+            auto change = std::make_shared<Change>(
                 ChangeType::New,
                 rel_path,
                 std::time_t(nullptr),
@@ -713,7 +713,7 @@ void SyncManager::initialSync() {
                     auto dto_clone = std::make_unique<FileRecordDTO>(*local_dto);
                     auto cmd = std::make_unique<CloudUploadCommand>(cloud_id);
                     cmd->setDTO(std::move(dto_clone));
-                    ChangeFactory::attachChangeCallbacks(change.get(), cmd.get());
+                    cmd->setOwner(change);
                     first_cmd.push_back(std::move(cmd));
                 }
 
@@ -749,7 +749,7 @@ void SyncManager::initialSync() {
 
                     auto cmd = std::make_unique<CloudUpdateCommand>(cloud_id);
                     cmd->setDTO(std::move(dto_clone));
-                    ChangeFactory::attachChangeCallbacks(change.get(), cmd.get());
+                    cmd->setOwner(change);
                     first_cmd.push_back(std::move(cmd));
                     cmds_count++;
                 }
@@ -780,7 +780,7 @@ void SyncManager::initialSync() {
     LOG_INFO("SyncManager", "=== initialSync() complete ===");
 }
 
-void SyncManager::handleChange(std::unique_ptr<Change> incoming) {
+void SyncManager::handleChange(std::shared_ptr<Change> incoming) {
     auto path = incoming->getTargetPath();
     auto type = incoming->getType();
     auto entry_type = incoming->getTargetType();
@@ -823,7 +823,7 @@ void SyncManager::handleChange(std::unique_ptr<Change> incoming) {
     }
 }
 
-void SyncManager::startChange(const std::filesystem::path& path, std::unique_ptr<Change> change) {
+void SyncManager::startChange(const std::filesystem::path& path, std::shared_ptr<Change> change) {
     change->setOnComplete([this, path](auto&& deps) {
         this->onChangeCompleted(path, std::move(deps));
         });
@@ -832,11 +832,11 @@ void SyncManager::startChange(const std::filesystem::path& path, std::unique_ptr
 }
 
 void SyncManager::onChangeCompleted(const std::filesystem::path& path,
-    std::vector<std::unique_ptr<Change>>&& dependents)
+    std::vector<std::shared_ptr<Change>>&& dependents)
 {
     LOG_INFO("SyncManager", "Change completed for path: %s", path.c_str());
 
-    std::unique_ptr<Change> life_holder;
+    std::shared_ptr<Change> life_holder;
     if (auto it = _current_changes.find(path); it != _current_changes.end()) {
         life_holder = std::move(it->second);
         _current_changes.erase(it);
@@ -989,7 +989,7 @@ void SyncManager::setupLocalHttpServer() {
 }
 
 void SyncManager::proccessLoop() {
-    std::unique_ptr<Change> change;
+    std::shared_ptr<Change> change;
     while (_changes_buff.pop(change)) {
         handleChange(std::move(change));
     }
