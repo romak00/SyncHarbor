@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "LocalStorage.h"
+#include "logger.h"
 #include "database.h"
 #include <filesystem>
 #include <random>
@@ -19,17 +20,42 @@ static void safeSleep() {
 class LocalStorageTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        auto tmp_dir = std::filesystem::temp_directory_path() / "-tmp-clousync-test-local_storage-";
-  
+        tmp_dir = std::filesystem::temp_directory_path() / "-test-local_storage-";
+
         std::filesystem::create_directory(tmp_dir);
         db = std::make_shared<Database>(":memory:");
         storage = std::make_unique<LocalStorage>(tmp_dir, /*cloudId=*/0, db);
+        storage->setOnChange([] {});
         storage->startWatching();
+
+        Logger::get().setGlobalLogLevel(LogLevel::DEBUG);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
 
     void TearDown() override {
         storage->stopWatching();
         std::filesystem::remove_all(tmp_dir);
+    }
+
+    std::vector<std::shared_ptr<Change>> waitChanges(size_t need = 1,
+        std::chrono::seconds to = 10s)
+    {
+        std::vector<std::shared_ptr<Change>> ch{};
+        auto deadline = std::chrono::steady_clock::now() + to;
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            auto tmp = storage->proccessChanges();
+            ch.reserve(ch.size() + tmp.size());
+            ch.insert(ch.end(),
+                std::make_move_iterator(tmp.begin()),
+                std::make_move_iterator(tmp.end())
+            );
+            if (ch.size() >= need)
+                return ch;
+            std::this_thread::sleep_for(200ms);
+        }
+        return ch;
     }
 
     std::filesystem::path tmp_dir;
@@ -39,48 +65,59 @@ protected:
 };
 
 TEST_F(LocalStorageTest, DetectCreateFile) {
+    Logger::get().addLogFile("DetectCreateFile", "cloudsync.DetectCreateFile.log");
     auto file = tmp_dir / "a.txt";
     std::ofstream(file) << "hello";
-    safeSleep();
+    auto changes = waitChanges();
 
-    auto changes = storage->proccessChanges();
     ASSERT_EQ(changes.size(), 1);
     EXPECT_EQ(changes[0]->getType(), ChangeType::New);
     EXPECT_EQ(changes[0]->getTargetPath(), std::filesystem::path("a.txt"));
 }
 
 TEST_F(LocalStorageTest, DetectModifyFile) {
+    Logger::get().addLogFile("DetectModifyFile", "cloudsync.DetectModifyFile.log");
     auto file = tmp_dir / "b.txt";
     {
         std::ofstream(file) << "v1";
     }
+    auto changes = waitChanges();
+
+    ASSERT_EQ(changes.size(), 1);
+    EXPECT_EQ(changes[0]->getType(), ChangeType::New);
+    EXPECT_EQ(changes[0]->getTargetPath(), std::filesystem::path("b.txt"));
 
     uint64_t hash = storage->computeFileHash(file);
     uint64_t file_id = storage->getFileId(file);
-    FileRecordDTO dto{
+    auto dto = std::make_unique<FileRecordDTO>(
         EntryType::File,
         "b.txt",
         std::filesystem::file_size(file),
         now(),
         hash,
         file_id
-    };
-    int global_id = db->add_file(dto);
+    );
+    int global_id = db->add_file(*dto);
 
-    safeSleep();
     std::ofstream(file, std::ios::app) << "v2";
-    safeSleep();
 
-    storage->getChanges();
-    auto changes = storage->proccessChanges();
+    changes = waitChanges();
+
     ASSERT_EQ(changes.size(), 1);
     EXPECT_EQ(changes[0]->getType(), ChangeType::Update);
     EXPECT_EQ(changes[0]->getTargetPath(), std::filesystem::path("b.txt"));
 }
 
 TEST_F(LocalStorageTest, DetectMoveFile) {
+    Logger::get().addLogFile("DetectMoveFile", "cloudsync.DetectMoveFile.log");
     auto oldp = tmp_dir / "c.txt";
     std::ofstream(oldp) << "x";
+
+    auto changes = waitChanges();
+
+    ASSERT_EQ(changes.size(), 1);
+    EXPECT_EQ(changes[0]->getType(), ChangeType::New);
+    EXPECT_EQ(changes[0]->getTargetPath(), std::filesystem::path("c.txt"));
 
     uint64_t hash = storage->computeFileHash(oldp);
     uint64_t file_id = storage->getFileId(oldp);
@@ -94,22 +131,25 @@ TEST_F(LocalStorageTest, DetectMoveFile) {
     };
     int global_id = db->add_file(dto);
 
-    safeSleep();
-
     auto newp = tmp_dir / "d.txt";
     std::filesystem::rename(oldp, newp);
-    safeSleep();
 
-    storage->getChanges();
-    auto changes = storage->proccessChanges();
+    changes = waitChanges();
+
     ASSERT_EQ(changes.size(), 1);
     EXPECT_EQ(changes[0]->getType(), ChangeType::Move);
-    EXPECT_EQ(changes[0]->getTargetPath(), std::filesystem::path("d.txt"));
+    EXPECT_EQ(changes[0]->getTargetPath(), std::filesystem::path("c.txt"));
 }
 
 TEST_F(LocalStorageTest, EditorAtomicSave) {
+    Logger::get().addLogFile("EditorAtomicSave", "cloudsync.EditorAtomicSave.log");
     auto orig = tmp_dir / "e.txt";
     std::ofstream(orig) << "old";
+
+    auto changes = waitChanges();
+    ASSERT_EQ(changes.size(), 1);
+    EXPECT_EQ(changes[0]->getType(), ChangeType::New);
+    EXPECT_EQ(changes[0]->getTargetPath(), std::filesystem::path("e.txt"));
 
     uint64_t hash = storage->computeFileHash(orig);
     uint64_t file_id = storage->getFileId(orig);
@@ -122,29 +162,30 @@ TEST_F(LocalStorageTest, EditorAtomicSave) {
         file_id
     };
     int global_id = db->add_file(dto);
-    
-    safeSleep();
 
     auto tmpf = tmp_dir / ".-tmp-cloudsync-e.txt";
     std::ofstream(tmpf) << "new";
-    safeSleep();
 
     std::filesystem::remove(orig);
-    safeSleep();
 
     std::filesystem::rename(tmpf, orig);
-    safeSleep();
 
-    storage->getChanges();
-    auto changes = storage->proccessChanges();
+    changes = waitChanges();
+
     ASSERT_EQ(changes.size(), 1);
     EXPECT_EQ(changes[0]->getType(), ChangeType::Update);
     EXPECT_EQ(changes[0]->getTargetPath(), std::filesystem::path("e.txt"));
 }
 
 TEST_F(LocalStorageTest, DetectDeleteFile) {
+    Logger::get().addLogFile("DetectDeleteFile", "cloudsync.DetectDeleteFile.log");
     auto file = tmp_dir / "f.txt";
     std::ofstream(file) << "foo";
+
+    auto changes = waitChanges();
+    ASSERT_EQ(changes.size(), 1);
+    EXPECT_EQ(changes[0]->getType(), ChangeType::New);
+    EXPECT_EQ(changes[0]->getTargetPath(), std::filesystem::path("f.txt"));
 
     uint64_t hash = storage->computeFileHash(file);
     uint64_t file_id = storage->getFileId(file);
@@ -157,26 +198,21 @@ TEST_F(LocalStorageTest, DetectDeleteFile) {
         file_id
     };
     int global_id = db->add_file(dto);
-    
-    safeSleep();
 
     std::filesystem::remove(file);
-    safeSleep();
 
-    storage->getChanges();
-    auto changes = storage->proccessChanges();
+    changes = waitChanges();
     ASSERT_EQ(changes.size(), 1);
     EXPECT_EQ(changes[0]->getType(), ChangeType::Delete);
     EXPECT_EQ(changes[0]->getTargetPath(), std::filesystem::path("f.txt"));
 }
 
 TEST_F(LocalStorageTest, DetectCreateDirectory) {
+    Logger::get().addLogFile("DetectCreateDirectory", "cloudsync.DetectCreateDirectory.log");
     auto dir = tmp_dir / "subdir";
     std::filesystem::create_directory(dir);
-    safeSleep();
 
-    storage->getChanges();
-    auto changes = storage->proccessChanges();
+    auto changes = waitChanges();
     ASSERT_EQ(changes.size(), 1);
     EXPECT_EQ(changes[0]->getType(), ChangeType::New);
     EXPECT_EQ(changes[0]->getTargetPath(), std::filesystem::path("subdir"));
@@ -184,39 +220,42 @@ TEST_F(LocalStorageTest, DetectCreateDirectory) {
 }
 
 TEST_F(LocalStorageTest, DetectNestedCreate) {
+    Logger::get().addLogFile("DetectNestedCreate", "cloudsync.DetectNestedCreate.log");
     auto dir = tmp_dir / "x" / "y";
     std::filesystem::create_directories(dir);
+    std::this_thread::sleep_for(50ms);
     auto file = dir / "inside.txt";
     std::ofstream(file) << "hi";
-    safeSleep();
 
-    storage->getChanges();
-    auto changes = storage->proccessChanges();
-    ASSERT_EQ(changes.size(), 2);
+    auto changes = waitChanges(3);
+    ASSERT_EQ(changes.size(), 3);
 
     EXPECT_EQ(changes[0]->getType(), ChangeType::New);
-    EXPECT_EQ(changes[0]->getTargetPath(), std::filesystem::path("x/y"));
+    EXPECT_EQ(changes[0]->getTargetPath(), std::filesystem::path("x"));
     EXPECT_EQ(changes[0]->getTargetType(), EntryType::Directory);
 
     EXPECT_EQ(changes[1]->getType(), ChangeType::New);
-    EXPECT_EQ(changes[1]->getTargetPath(), std::filesystem::path("x/y/inside.txt"));
-    EXPECT_EQ(changes[1]->getTargetType(), EntryType::File);
+    EXPECT_EQ(changes[1]->getTargetPath(), std::filesystem::path("x/y"));
+    EXPECT_EQ(changes[1]->getTargetType(), EntryType::Directory);
+
+    EXPECT_EQ(changes[2]->getType(), ChangeType::New);
+    EXPECT_EQ(changes[2]->getTargetPath(), std::filesystem::path("x/y/inside.txt"));
+    EXPECT_EQ(changes[2]->getTargetType(), EntryType::File);
 }
 
 TEST_F(LocalStorageTest, GetFileIdOnCreate) {
+    Logger::get().addLogFile("GetFileIdOnCreate", "cloudsync.GetFileIdOnCreate.log");
     auto file = tmp_dir / "g.txt";
     std::ofstream(file) << "hello";
-    safeSleep();
 
-    storage->getChanges();
-    auto changes = storage->proccessChanges();
+    auto changes = waitChanges();
     ASSERT_EQ(changes.size(), 1);
     EXPECT_EQ(changes[0]->getType(), ChangeType::New);
 
-    uint64_t fid1 = storage->getFileId(std::filesystem::path("g.txt"));
-    ASSERT_GT(fid1, 0ULL) << "file_id должен быть положительным";
+    uint64_t fid1 = storage->getFileId(tmp_dir / std::filesystem::path("g.txt"));
+    ASSERT_GT(fid1, 0ULL) << "file_id should bee > 0";
 
-    uint64_t fid2 = storage->getFileId(std::filesystem::path("g.txt"));
+    uint64_t fid2 = storage->getFileId(tmp_dir / std::filesystem::path("g.txt"));
     EXPECT_EQ(fid1, fid2);
 }
 

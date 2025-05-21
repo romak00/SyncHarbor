@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 #include "database.h"
 #include <nlohmann/json.hpp>
+#include "logger.h"
 
 using json = nlohmann::json;
 
@@ -21,6 +22,8 @@ TEST_F(DatabaseTest, CloudConfigCRUD) {
     cfg["bar"] = "baz";
 
     int cid = db->add_cloud("mycloud", CloudProviderType::Dropbox, cfg);
+    CloudResolver::registerCloud(cid, "Dropbox");
+
     ASSERT_GT(cid, 0);
 
     auto got = db->get_cloud_config(cid);
@@ -70,6 +73,14 @@ TEST_F(DatabaseTest, FileTableBasicOps) {
 }
 
 TEST_F(DatabaseTest, FileLinksCRUD) {
+    json cfg;
+    cfg["foo"] = 123;
+    cfg["bar"] = "baz";
+
+    int cid = db->add_cloud("mycloud", CloudProviderType::Dropbox, cfg);
+    CloudResolver::registerCloud(cid, "Dropbox");
+    ASSERT_GT(cid, 0);
+
     FileRecordDTO fdto{
         EntryType::File,
         std::filesystem::path("bar.bin"),
@@ -81,22 +92,22 @@ TEST_F(DatabaseTest, FileLinksCRUD) {
     int gid = db->add_file(fdto);
     ASSERT_GT(gid, 0);
 
-    FileRecordDTO linkDto{
+    FileRecordDTO link_dto{
         /*g_id=*/ gid,
-        /*c_id=*/ 55,
+        /*c_id=*/ cid,
         /*parent=*/ "root",
         /*cf_id=*/ "cloud-file-xyz",
         /*size=*/ 123,
         /*hash*/ std::string("ffee"),
         /*mod_time=*/ 2000
     };
-    db->add_file_link(linkDto);
+    db->add_file_link(link_dto);
 
-    EXPECT_EQ(db->getCloudFileIdByPath("bar.bin", 55), "cloud-file-xyz");
+    EXPECT_EQ(db->getCloudFileIdByPath("bar.bin", cid), "cloud-file-xyz");
 
-    EXPECT_EQ(db->get_cloud_parent_id_by_cloud_id(55, "cloud-file-xyz"), "root");
+    EXPECT_EQ(db->get_cloud_parent_id_by_cloud_id(cid, "cloud-file-xyz"), "root");
 
-    auto cloudRec = db->getFileByCloudIdAndCloudFileId(55, "cloud-file-xyz");
+    auto cloudRec = db->getFileByCloudIdAndCloudFileId(cid, "cloud-file-xyz");
     ASSERT_TRUE(cloudRec);
     EXPECT_EQ(cloudRec->global_id, gid);
     EXPECT_EQ(cloudRec->cloud_file_id, "cloud-file-xyz");
@@ -106,14 +117,24 @@ TEST_F(DatabaseTest, FileLinksCRUD) {
 TEST_F(DatabaseTest, DeleteFileAndLinks) {
     FileRecordDTO fdto{ EntryType::File, "todelete.txt", 1, 0, 0, 10 };
     int gid = db->add_file(fdto);
-    db->add_file_link({ gid, 2, "p", "fid", 1, std::string("h"), 0 });
+    ASSERT_GT(gid, 0);
+
+    json cfg;
+    cfg["foo"] = 123;
+    cfg["bar"] = "baz";
+
+    int cid = db->add_cloud("mycloud", CloudProviderType::Dropbox, cfg);
+    CloudResolver::registerCloud(cid, "Dropbox");
+    ASSERT_GT(cid, 0);
+
+    db->add_file_link({ gid, cid, "p", "fid", 1, std::string("h"), 0 });
 
     EXPECT_NO_THROW(db->getFileByGlobalId(gid));
-    EXPECT_EQ(db->getCloudFileIdByPath("todelete.txt", 2), "fid");
+    EXPECT_EQ(db->getCloudFileIdByPath("todelete.txt", cid), "fid");
 
     db->delete_file_and_links(gid);
 
     EXPECT_FALSE(db->quickPathCheck("todelete.txt"));
-    EXPECT_THROW(db->getFileByGlobalId(gid), std::runtime_error);
-    EXPECT_THROW(db->getCloudFileIdByPath("todelete.txt", 2), std::runtime_error);
+    EXPECT_EQ(db->getFileByGlobalId(gid), nullptr);
+    EXPECT_EQ(db->getCloudFileIdByPath("todelete.txt", cid), std::string{});
 }
