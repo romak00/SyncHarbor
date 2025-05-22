@@ -13,9 +13,10 @@ if [[ $# -eq 2 && "$1" == "--target" ]]; then
 fi
 
 echo "Configuring ($cfg)…"
-cmake -B build -DCMAKE_BUILD_TYPE="$cfg" "$@"
+cmake -B build -DCMAKE_BUILD_TYPE="$cfg" "$@" -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
 echo "Building ($cfg)…"
-cmake --build build --config "$cfg" --target "$target" -- -j$(nproc || sysctl -n hw.ncpu)
+cpu=$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+cmake --build build --config "$cfg" --target "$target" -- -j${cpu}
 
 echo "Done."

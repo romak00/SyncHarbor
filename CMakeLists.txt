@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.20...3.31)
 project(SyncHarbor VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_CONFIGURATION_TYPES "Debug;Release;RelWithDebInfo" CACHE STRING "" FORCE)
@@ -18,7 +18,7 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(ENABLE_DEBUG_TOOLS OFF CACHE BOOL "" FORCE)
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
-    set(ENABLE_LOGGING     OFF CACHE BOOL "" FORCE)
+    set(ENABLE_LOGGING     ON CACHE BOOL "" FORCE)
     set(ENABLE_DEBUG_TOOLS ON  CACHE BOOL "" FORCE)
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()
@@ -100,11 +100,21 @@ target_link_libraries(SyncHarbor_core
     wtr.hdr_watcher
 )
 
+if(APPLE)
+  find_library(COREFOUNDATION_FRAMEWORK CoreFoundation)
+  find_library(CORESERVICES_FRAMEWORK   CoreServices)
+  target_link_libraries(SyncHarbor_core
+    PUBLIC
+      ${COREFOUNDATION_FRAMEWORK}
+      ${CORESERVICES_FRAMEWORK}
+  )
+endif()
+
 target_compile_options(SyncHarbor_core PRIVATE
     # Debug
     $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:GNU>>:-Wall -Wextra -Wpedantic -fsanitize=undefined>
     $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:Clang>>:-Weverything -fsanitize=undefined>
-    $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:MSVC>>:/W4 /fsanitize=address>
+    $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:MSVC>>:/W4 /fsanitize=undefined>
 )
 
 target_compile_options(SyncHarbor_core PRIVATE
@@ -122,6 +132,7 @@ target_compile_options(SyncHarbor_core PRIVATE
 target_link_options(SyncHarbor_core PUBLIC
   $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:GNU>>:-fsanitize=undefined>
   $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:Clang>>:-fsanitize=undefined>
+  $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:MSVC>>:/fsanitize=undefined>
 )
 
 add_executable(SyncHarbor src/main.cpp)
@@ -130,6 +141,7 @@ target_link_libraries(SyncHarbor PRIVATE SyncHarbor_core)
 target_link_options(SyncHarbor PUBLIC
   $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:GNU>>:-fsanitize=undefined>
   $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:Clang>>:-fsanitize=undefined>
+  $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:MSVC>>:/fsanitize=undefined>
 )
 
 enable_testing()

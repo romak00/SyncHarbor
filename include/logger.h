@@ -13,10 +13,10 @@
 #include <iostream>
 
 enum class LogLevel {
-    DEBUG,
-    INFO,
-    WARNING,
-    ERROR
+    DBG,
+    INF,
+    WRN,
+    ERR
 };
 
 class ThreadNamer {
@@ -85,7 +85,7 @@ private:
     std::mutex _mutex;
     std::map<std::string, LogDestination> _logs;
     bool _console_enabled = false;
-    LogLevel _global_level = LogLevel::DEBUG;
+    LogLevel _global_level = LogLevel::DBG;
 };
 
 class CloudResolver {
@@ -107,13 +107,13 @@ private:
 };
 
 #if CUSTOM_LOGGING_ENABLED
-    #define LOG_DEBUG(component, ...)           Logger::get().log(LogLevel::DEBUG, component, __VA_ARGS__)
-    #define LOG_INFO(component, ...)            Logger::get().log(LogLevel::INFO, component, __VA_ARGS__)
-    #define LOG_WARNING(component, ...)         Logger::get().log(LogLevel::WARNING, component, __VA_ARGS__)
-    #define LOG_ERROR(component, ...)           Logger::get().log(LogLevel::ERROR, component, __VA_ARGS__)
+#define LOG_DEBUG(component, ...)           Logger::get().log(LogLevel::DBG, component, __VA_ARGS__)
+#define LOG_INFO(component, ...)            Logger::get().log(LogLevel::INF, component, __VA_ARGS__)
+#define LOG_WARNING(component, ...)         Logger::get().log(LogLevel::WRN, component, __VA_ARGS__)
+#define LOG_ERROR(component, ...)           Logger::get().log(LogLevel::ERR, component, __VA_ARGS__)
 #else
-    #define LOG_DEBUG(...)
-    #define LOG_INFO(...)
-    #define LOG_WARNING(...)
-    #define LOG_ERROR(...)
+#define LOG_DEBUG(...)
+#define LOG_INFO(...)
+#define LOG_WARNING(...)
+#define LOG_ERROR(...)
 #endif

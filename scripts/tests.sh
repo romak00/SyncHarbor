@@ -4,10 +4,16 @@ set -euo pipefail
 cfg="${1:-Debug}"
 pushd build
 
+if command -v nproc &>/dev/null; then
+  PARALLEL=$(nproc)
+else
+  PARALLEL=$(sysctl -n hw.ncpu)
+fi
+
 echo "Running DatabaseTests in parallel…"
 ctest -C "$cfg" \
   --output-on-failure \
-  --parallel "$(nproc || sysctl -n hw.ncpu)" \
+  --parallel "$PARALLEL" \
   -R "^DatabaseTest\."
 
 echo "Running LocalStorageTests sequentially…"

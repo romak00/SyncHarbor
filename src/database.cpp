@@ -18,6 +18,21 @@ Database::Database(const std::string& db_file) {
     execute("PRAGMA synchronous = NORMAL;");
     create_tables();
 }
+Database::Database(const std::filesystem::path& db_file) {
+    auto db_file_str = db_file.string();
+    int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX;
+    int rc = sqlite3_open_v2(db_file_str.c_str(), &_db, flags, nullptr);
+
+    if (rc != SQLITE_OK) {
+        std::string errMsg = _db ? sqlite3_errmsg(_db) : "Unknown error";
+        throw std::runtime_error("Error opening db: " + errMsg);
+    }
+
+    execute("PRAGMA foreign_keys = ON;");
+    execute("PRAGMA journal_mode = WAL;");
+    execute("PRAGMA synchronous = NORMAL;");
+    create_tables();
+}
 
 Database::~Database() {
     if (_db) {
@@ -149,7 +164,8 @@ int Database::getGlobalIdByPath(const std::filesystem::path& path) {
         throw std::runtime_error("Failed to prepare statement getGlobalIdByPath)");
     }
 
-    sqlite3_bind_text(stmt, 1, path.c_str(), -1, SQLITE_STATIC);
+    auto path_str = path.string();
+    sqlite3_bind_text(stmt, 1, path_str.c_str(), -1, SQLITE_STATIC);
 
     rc = sqlite3_step(stmt);
     if (rc != SQLITE_ROW) {
@@ -217,7 +233,8 @@ std::unique_ptr<FileRecordDTO> Database::getFileByPath(const std::filesystem::pa
         throw std::runtime_error("Failed to prepare statement getFileByPath)");
     }
 
-    sqlite3_bind_text(stmt, 1, path.c_str(), -1 , SQLITE_STATIC);
+    auto path_str = path.string();
+    sqlite3_bind_text(stmt, 1, path_str.c_str(), -1, SQLITE_STATIC);
 
     rc = sqlite3_step(stmt);
     if (rc != SQLITE_ROW) {
@@ -313,7 +330,8 @@ std::filesystem::path Database::getMissingPathPart(const std::filesystem::path& 
             throw std::runtime_error("Failed to prepare statement (checkExistanceByPath)");
         }
 
-        sqlite3_bind_text(stmt, 1, accum.c_str(), -1, SQLITE_STATIC);
+        auto accum_str = accum.string();
+        sqlite3_bind_text(stmt, 1, accum_str.c_str(), -1, SQLITE_STATIC);
 
         rc = sqlite3_step(stmt);
         if (rc != SQLITE_ROW) {
@@ -373,7 +391,8 @@ std::string Database::getCloudFileIdByPath(const std::filesystem::path& path, co
         throw std::runtime_error("Failed to prepare statement getCloudFileIdbyPath)");
     }
 
-    sqlite3_bind_text(stmt, 1, path.c_str(), -1, SQLITE_STATIC);
+    auto path_str = path.string();
+    sqlite3_bind_text(stmt, 1, path_str.c_str(), -1, SQLITE_STATIC);
 
     rc = sqlite3_step(stmt);
     if (rc != SQLITE_ROW) {
@@ -459,7 +478,8 @@ int Database::add_file(const FileRecordDTO& dto) {
         throw std::runtime_error("Failed to prepare SQL statement add_file");
     }
     sqlite3_bind_text(stmt, 1, to_cstr(dto.type), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, dto.rel_path.c_str(), -1, SQLITE_STATIC);
+    auto path_str = dto.rel_path.string();
+    sqlite3_bind_text(stmt, 2, path_str.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_int64(stmt, 3, dto.size);
     sqlite3_bind_int64(stmt, 4, std::get<uint64_t>(dto.cloud_hash_check_sum));
     sqlite3_bind_int64(stmt, 5, static_cast<sqlite3_int64>(dto.cloud_file_modified_time));
@@ -498,7 +518,8 @@ bool Database::quickPathCheck(const std::filesystem::path& path) {
         throw std::runtime_error("Failed to prepare statement (quickPathCheck)");
     }
 
-    sqlite3_bind_text(stmt, 1, path.c_str(), -1, SQLITE_STATIC);
+    auto path_str = path.string();
+    sqlite3_bind_text(stmt, 1, path_str.c_str(), -1, SQLITE_STATIC);
 
     rc = sqlite3_step(stmt);
     if (rc != SQLITE_ROW) {
@@ -872,7 +893,8 @@ void Database::update_file(const FileMovedDTO& dto) {
         throw std::runtime_error("Failed to prepare SQL statement update_file_link");
     }
 
-    sqlite3_bind_text(stmt, 1, dto.new_rel_path.c_str(), -1, SQLITE_STATIC);
+    auto path_str = dto.new_rel_path.string();
+    sqlite3_bind_text(stmt, 1, path_str.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_int64(stmt, 2, static_cast<sqlite3_int64>(dto.cloud_file_modified_time));
     sqlite3_bind_int(stmt, 3, dto.global_id);
 

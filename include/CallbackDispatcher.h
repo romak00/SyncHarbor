@@ -10,21 +10,24 @@ public:
     static CallbackDispatcher& get();
     void submit(std::unique_ptr<ICommand> command);
     void setDB(const std::string& db_file_name);
+    void setDB(const std::shared_ptr<Database>& db);
     void setClouds(const std::unordered_map<int, std::shared_ptr<BaseStorage>>& clouds);
 
     bool isIdle() const noexcept;
     void waitUntilIdle() const;
 
     void syncDbWrite(const std::unique_ptr<FileRecordDTO>& dto);
+    void syncDbWrite(const std::unique_ptr<FileUpdatedDTO>& dto);
     void syncDbWrite(const std::vector<std::unique_ptr<FileRecordDTO>>& vec_dto);
 
+    void finish();
+    void start();
 private:
     friend class HttpClient;
 
     CallbackDispatcher();
     ~CallbackDispatcher() = default;
 
-    void finish();
 
     CallbackDispatcher(const CallbackDispatcher&) = delete;
     CallbackDispatcher& operator=(const CallbackDispatcher&) = delete;

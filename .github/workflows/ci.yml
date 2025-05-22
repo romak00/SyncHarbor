@@ -37,18 +37,40 @@ jobs:
       - name: Configure & Build (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\scripts\build.ps1 -Config ${{ matrix.config }} -- -DCMAKE_TOOLCHAIN_FILE=third_party/vcpkg/scripts/buildsystems/vcpkg.cmake
+        run: .\scripts\build.ps1 -Config ${{ matrix.config }} '-DCMAKE_TOOLCHAIN_FILE=third_party/vcpkg/scripts/buildsystems/vcpkg.cmake'
 
       # Run tests
       - name: Run tests (Unix)
         if: runner.os != 'Windows'
         shell: bash
-        run: bash scripts/test.sh ${{ matrix.config }}
+        run: bash scripts/tests.sh ${{ matrix.config }}
+      
+      - name: Dump test logs on failure
+        if: failure()
+        run: |
+          echo "=== BEGIN TEST LOGS ==="
+          for log in build/tests/*.log; do
+            echo
+            echo "----- $log -----"
+            head -n 1000 "$log" || cat "$log"
+            echo
+          done
+          echo "==== END TEST LOGS ===="
 
       - name: Run tests (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\scripts\test.ps1 -Config ${{ matrix.config }}
+        run: .\scripts\tests.ps1 -Config ${{ matrix.config }}
+
+      - name: Dump test logs on failure
+        if: failure()
+        run: |
+          echo "=== BEGIN TEST LOGS ==="
+          Get-ChildItem build/tests/*.log | ForEach-Object {
+            Write-Host "`n----- $($_.Name) -----"
+            Get-Content $_.FullName -TotalCount 1000
+          }
+          echo "==== END TEST LOGS ===="
 
   package-and-release:
     needs: build-and-test
@@ -61,7 +83,7 @@ jobs:
         run: scripts/bootstrap.sh
 
       - name: Configure & Build Release
-        run: scripts/build.sh Release -- -DCMAKE_TOOLCHAIN_FILE=third_party/vcpkg/scripts/buildsystems/vcpkg.cmake
+        run: scripts/build.sh Release
 
       - name: Package with CPack
         run: |

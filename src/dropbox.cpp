@@ -611,7 +611,7 @@ std::string Dropbox::getDeltaToken() {
 }
 
 std::string Dropbox::getHomeDir() const {
-    return _home_path;
+    return _home_path.string();
 }
 
 void Dropbox::getChanges() {
@@ -761,8 +761,8 @@ std::vector<std::shared_ptr<Change>> Dropbox::proccessChanges() {
                     mtime, old_path, rel_path,
                     /*oldParent=*/"", /*newParent=*/""
                 );
-                if (pending_deletes.contains(rel_path)) {
-                    pending_deletes.erase(rel_path);
+                if (pending_deletes.contains(rel_path.string())) {
+                    pending_deletes.erase(rel_path.string());
                 }
                 ch = ChangeFactory::makeCloudMove(std::move(m_dto));
 
@@ -788,7 +788,7 @@ std::vector<std::shared_ptr<Change>> Dropbox::proccessChanges() {
                     rel_path, global_id, _id, cloud_file_id, mtime
                 );
                 auto mb_del = ChangeFactory::makeDelete(std::move(dto));
-                pending_deletes.emplace(rel_path, std::move(mb_del));
+                pending_deletes.emplace(rel_path.string(), std::move(mb_del));
             }
             else if (need_move) {
                 LOG_DEBUG("Dropbox", "  -> emit MOVE for: \"%s\" -> \"%s\"",
@@ -799,8 +799,8 @@ std::vector<std::shared_ptr<Change>> Dropbox::proccessChanges() {
                     mtime, old_path, rel_path,
                     /*oldParent=*/"", /*newParent=*/""
                 );
-                if (pending_deletes.contains(rel_path)) {
-                    pending_deletes.erase(rel_path);
+                if (pending_deletes.contains(rel_path.string())) {
+                    pending_deletes.erase(rel_path.string());
                 }
                 ch = ChangeFactory::makeCloudMove(std::move(dto));
             }

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <limits>
 #include <cctype>
+#include <csignal>
 
 auto listConfigs(const std::string& dir = ".") {
     std::vector<std::string> configs;
@@ -83,7 +84,7 @@ void configureLocalDirectory(const std::unique_ptr<SyncManager>& sync_manager) {
             std::cout << "Error: " << e.what() << "\n";
             if (!askYesNo("Choose another folder?", false)) {
                 std::exit(1);
-            } 
+            }
         }
     }
 }
@@ -158,11 +159,11 @@ void on_sigint(int)
 }
 
 int main(int argc, char* argv[]) {
-    std::signal(SIGINT, on_sigint);
+    signal(SIGINT, on_sigint);
 
     ThreadNamer::setThreadName("main");
     Logger::get().setConsoleLogging(false);
-    Logger::get().setGlobalLogLevel(LogLevel::DEBUG);
+    Logger::get().setGlobalLogLevel(LogLevel::DBG);
 
     if (argc < 2) {
         std::cout << "Usage:\n"

@@ -20,22 +20,36 @@ static void safeSleep() {
 class LocalStorageTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        tmp_dir = std::filesystem::temp_directory_path() / "-test-local_storage-";
+        auto a_tmp_dir = std::filesystem::temp_directory_path() / "-test-local_storage-";
 
-        std::filesystem::create_directory(tmp_dir);
-        db = std::make_shared<Database>(":memory:");
+        std::error_code ec;
+        std::filesystem::remove_all(a_tmp_dir, ec);
+        std::filesystem::create_directory(a_tmp_dir);
+
+        tmp_dir = std::filesystem::canonical(a_tmp_dir);
+
+        db = std::make_shared<Database>(std::string{ ":memory:" });
+
+        CallbackDispatcher::get().finish();
+        CallbackDispatcher::get().setDB(db);
+        CallbackDispatcher::get().setClouds({});
+
         storage = std::make_unique<LocalStorage>(tmp_dir, /*cloudId=*/0, db);
         storage->setOnChange([] {});
         storage->startWatching();
 
-        Logger::get().setGlobalLogLevel(LogLevel::DEBUG);
+        Logger::get().setGlobalLogLevel(LogLevel::DBG);
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
     void TearDown() override {
         storage->stopWatching();
-        std::filesystem::remove_all(tmp_dir);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+        std::error_code ec;
+        std::filesystem::remove_all(tmp_dir, ec);
     }
 
     std::vector<std::shared_ptr<Change>> waitChanges(size_t need = 1,
@@ -221,10 +235,14 @@ TEST_F(LocalStorageTest, DetectCreateDirectory) {
 
 TEST_F(LocalStorageTest, DetectNestedCreate) {
     Logger::get().addLogFile("DetectNestedCreate", "SyncHarbor.DetectNestedCreate.log");
-    auto dir = tmp_dir / "x" / "y";
-    std::filesystem::create_directories(dir);
-    std::this_thread::sleep_for(50ms);
-    auto file = dir / "inside.txt";
+    auto dir1 = tmp_dir / "x";
+    std::filesystem::create_directories(dir1);
+    std::this_thread::sleep_for(100ms);
+    auto dir2 = dir1 / "y";
+    std::filesystem::create_directories(dir2);
+    std::this_thread::sleep_for(100ms);
+
+    auto file = dir2 / "inside.txt";
     std::ofstream(file) << "hi";
 
     auto changes = waitChanges(3);

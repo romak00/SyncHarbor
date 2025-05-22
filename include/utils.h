@@ -142,11 +142,21 @@ inline std::time_t convertCloudTime(std::string datetime) {
 #endif
 }
 
-inline std::time_t convertSystemTime(const std::filesystem::path& path) {
-    const auto ftime = std::filesystem::last_write_time(path);
-    auto fs_tp = std::chrono::file_clock::to_sys(ftime);
-    auto stime = std::chrono::time_point_cast<std::chrono::system_clock::duration>(fs_tp);
-    return std::chrono::system_clock::to_time_t(stime);
+inline std::time_t convertSystemTime(const std::filesystem::path& p) {
+    using namespace std::chrono;
+    auto ftime = std::filesystem::last_write_time(p);
+
+#if defined(__cpp_lib_chrono) && __cpp_lib_chrono >= 201907L && !defined(_MSC_VER)
+    auto sctp = std::filesystem::file_time_type::clock::to_sys(ftime);
+    return system_clock::to_time_t(sctp);
+#else
+    using file_clock = decltype(ftime)::clock;
+    auto now_file = file_clock::now();
+    auto diff = ftime - now_file;
+    auto diff_sys = duration_cast<system_clock::duration>(diff);
+    auto sctp = system_clock::now() + diff_sys;
+    return system_clock::to_time_t(sctp);
+#endif
 }
 
 
@@ -656,7 +666,7 @@ public:
         _timer = std::chrono::steady_clock::now() + std::chrono::milliseconds(delay);
     }
 
-    void setFileStream(const std::string& file_path, std::ios::openmode mode) {
+    void setFileStream(const std::filesystem::path& file_path, std::ios::openmode mode) {
         _iofd = std::fstream(file_path, mode | std::ios::binary);
         if (_iofd && _iofd.is_open()) {
             switch (mode) {
@@ -671,7 +681,7 @@ public:
             }
         }
         else {
-            throw std::runtime_error("Error opening file: " + file_path);
+            throw std::runtime_error("Error opening file: " + file_path.string());
         }
     }
 
@@ -847,10 +857,24 @@ public:
         _map.emplace(path, ct);
     }
 
+    void add(const std::filesystem::path& path, ChangeType ct) {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _map.emplace(path.string(), ct);
+    }
+
     bool check(const std::string& path, ChangeType ct) {
         std::lock_guard<std::mutex> lock(_mutex);
         if (_map.contains(path) && _map[path] == ct) {
             _map.erase(path);
+            return true;
+        }
+        return false;
+    }
+
+    bool check(const std::filesystem::path& path, ChangeType ct) {
+        std::lock_guard<std::mutex> lock(_mutex);
+        if (_map.contains(path.string()) && _map[path.string()] == ct) {
+            _map.erase(path.string());
             return true;
         }
         return false;
@@ -882,9 +906,21 @@ public:
         _map.emplace(path, ct);
     }
 
+    void add(const std::filesystem::path& path, ChangeType ct) {
+        _map.emplace(path.string(), ct);
+    }
+
     bool check(const std::string& path, ChangeType ct) {
         if (_map.contains(path) && _map[path] == ct) {
             _map.erase(path);
+            return true;
+        }
+        return false;
+    }
+
+    bool check(const std::filesystem::path& path, ChangeType ct) {
+        if (_map.contains(path.string()) && _map[path.string()] == ct) {
+            _map.erase(path.string());
             return true;
         }
         return false;

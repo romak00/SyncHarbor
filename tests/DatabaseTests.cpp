@@ -10,7 +10,7 @@ using json = nlohmann::json;
 class DatabaseTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        db = std::make_unique<Database>(":memory:");
+        db = std::make_unique<Database>(std::string{ ":memory:" });
     }
 
     std::unique_ptr<Database> db;

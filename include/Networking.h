@@ -21,6 +21,7 @@ public:
     void setClouds(const std::unordered_map<int, std::shared_ptr<BaseStorage>>& clouds);
 
     void shutdown();
+    void start();
 
     void syncRequest(const std::unique_ptr<RequestHandle>& handle);
 

@@ -49,7 +49,7 @@ void LocalHttpServer::startListening() {
     LOG_INFO("WebhookServer", "Starting listening on http://localhost:%d", _port);
     _listener_thread = std::make_unique<std::thread>([this]() {
         _svr.listen("localhost", _port);
-    });
+        });
 }
 
 void LocalHttpServer::stopListening() {

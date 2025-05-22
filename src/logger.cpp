@@ -94,10 +94,10 @@ void Logger::output(const std::string& formatted, LogLevel level) {
 
 std::string Logger::levelToString(LogLevel level) {
     switch (level) {
-    case LogLevel::DEBUG:   return "DEBUG";
-    case LogLevel::INFO:    return "INFO";
-    case LogLevel::WARNING: return "WARNING";
-    case LogLevel::ERROR:   return "ERROR";
+    case LogLevel::DBG:   return "DEBUG";
+    case LogLevel::INF:    return "INFO";
+    case LogLevel::WRN: return "WARNING";
+    case LogLevel::ERR:   return "ERROR";
     default:                return "UNKNOWN";
     }
 }

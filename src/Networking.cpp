@@ -7,8 +7,6 @@ HttpClient::HttpClient()
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
     _large_multi_handle = curl_multi_init();
-
-    _large_worker = std::make_unique<std::thread>(&HttpClient::largeRequestsWorker, this);
 }
 
 void HttpClient::syncRequest(const std::unique_ptr<RequestHandle>& handle) {
@@ -67,6 +65,11 @@ void HttpClient::shutdown() {
     CallbackDispatcher::get().finish();
 
     LOG_INFO("HttpClient", "Shutdown complete");
+}
+
+void HttpClient::start() {
+    LOG_INFO("HttpClient", "Starting large worker...");
+    _large_worker = std::make_unique<std::thread>(&HttpClient::largeRequestsWorker, this);
 }
 
 HttpClient::~HttpClient() {

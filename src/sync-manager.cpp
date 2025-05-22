@@ -307,9 +307,11 @@ void SyncManager::init() {
 
     ChangeFactory::initClouds(_clouds);
 
-    HttpClient::get().setClouds(_clouds);
     CallbackDispatcher::get().setDB(_db_file);
     CallbackDispatcher::get().setClouds(_clouds);
+    CallbackDispatcher::get().start();
+    HttpClient::get().setClouds(_clouds);
+    HttpClient::get().start();
 }
 
 void SyncManager::loadConfig() {
@@ -326,7 +328,7 @@ void SyncManager::loadConfig() {
         std::string type_str = cloud["type"];
         CloudProviderType type = cloud_type_from_string(type_str);
         nlohmann::json cloud_data = cloud["data"];
-        std::filesystem::path cloud_home_path(cloud_data["dir"]);
+        std::filesystem::path cloud_home_path(cloud_data["dir"].get<std::string>());
         int cloud_id = _db->add_cloud(name, type, cloud_data);
         if (type == CloudProviderType::GoogleDrive) {
             _clouds.emplace(
@@ -370,7 +372,7 @@ void SyncManager::setupClouds() {
         std::string type_str = cloud["type"].get<std::string>();
         CloudProviderType type = cloud_type_from_string(type_str);
         nlohmann::json cloud_data = cloud["config_data"];
-        std::filesystem::path cloud_home_path(cloud_data["dir"]);
+        std::filesystem::path cloud_home_path(cloud_data["dir"].get<std::string>());
 
         std::string client_id = cloud_data["client_id"].get<std::string>();
         std::string client_secret = cloud_data["client_secret"].get<std::string>();
@@ -486,9 +488,11 @@ void SyncManager::initialSync() {
     auto clouds = _clouds;
     clouds.emplace(0, _local);
 
-    HttpClient::get().setClouds(clouds);
     CallbackDispatcher::get().setDB(_db_file);
     CallbackDispatcher::get().setClouds(clouds);
+    CallbackDispatcher::get().start();
+    HttpClient::get().setClouds(clouds);
+    HttpClient::get().start();
 
     LOG_INFO("SyncManager", "Scanning local initialFiles()");
 
@@ -570,7 +574,7 @@ void SyncManager::initialSync() {
             auto change = std::make_shared<Change>(
                 ChangeType::New,
                 path,
-                std::time_t(nullptr),
+                std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()),
                 cloud_id
             );
             std::unique_ptr<ICommand> first_cmd = nullptr;
@@ -607,7 +611,7 @@ void SyncManager::initialSync() {
             auto change = std::make_shared<Change>(
                 ChangeType::Update,
                 path,
-                std::time_t(nullptr),
+                std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()),
                 cloud_id
             );
 
@@ -683,7 +687,7 @@ void SyncManager::initialSync() {
                     change = std::make_shared<Change>(
                         ChangeType::New,
                         rel_path,
-                        std::time_t(nullptr),
+                        std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()),
                         0
                     );
                     change->setCmdChain(std::move(first_cmd));
@@ -701,7 +705,7 @@ void SyncManager::initialSync() {
             auto change = std::make_shared<Change>(
                 ChangeType::New,
                 rel_path,
-                std::time_t(nullptr),
+                std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()),
                 0
             );
             std::vector<std::unique_ptr<ICommand>> first_cmd = {};

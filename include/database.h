@@ -11,6 +11,7 @@ class ICommand;
 class Database {
 public:
     Database(const std::string& db_path);
+    Database(const std::filesystem::path& db_path);
     ~Database();
 
     int add_cloud(

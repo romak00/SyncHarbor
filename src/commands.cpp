@@ -155,7 +155,7 @@ std::string LocalMoveCommand::getTarget() const {
     return _dto->old_rel_path.string();
 }
 
-EntryType LocalMoveCommand::getTargetType() const{
+EntryType LocalMoveCommand::getTargetType() const {
     return _dto->type;
 }
 

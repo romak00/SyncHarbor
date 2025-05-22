@@ -8,12 +8,13 @@ CallbackDispatcher& CallbackDispatcher::get() {
     return instance;
 }
 
-CallbackDispatcher::CallbackDispatcher() {
-    _worker = std::make_unique<std::thread>(&CallbackDispatcher::worker, this);
-    LOG_INFO("CallbackDispatcher", "initialized. Worker thread started");
-}
+CallbackDispatcher::CallbackDispatcher() {}
 
 void CallbackDispatcher::finish() {
+    if (!_should_stop.exchange(false)) {
+        LOG_WARNING("CallbackDispatcher", "finish called but worker not running");
+        return;
+    }
     LOG_INFO("CallbackDispatcher", "Shutting down dispatcher...");
     _should_stop.store(true, std::memory_order_release);
     _queue.close();
@@ -22,8 +23,17 @@ void CallbackDispatcher::finish() {
     }
 }
 
+void CallbackDispatcher::start() {
+    LOG_INFO("HttpClient", "Starting large worker...");
+    _worker = std::make_unique<std::thread>(&CallbackDispatcher::worker, this);
+}
+
 void CallbackDispatcher::setDB(const std::string& db_file_name) {
     _db = std::make_unique<Database>(db_file_name);
+}
+
+void CallbackDispatcher::setDB(const std::shared_ptr<Database>& db) {
+    _db = std::make_unique<Database>(*db);
 }
 
 void CallbackDispatcher::setClouds(const std::unordered_map<int, std::shared_ptr<BaseStorage>>& clouds) {
@@ -79,6 +89,18 @@ void CallbackDispatcher::syncDbWrite(const std::unique_ptr<FileRecordDTO>& dto) 
     }
     else {
         _db->add_file_link(*dto);
+    }
+}
+
+void CallbackDispatcher::syncDbWrite(const std::unique_ptr<FileUpdatedDTO>& dto) {
+    CallbackDispatcher::get().waitUntilIdle();
+    std::lock_guard lock(_db_mutex);
+
+    if (dto->cloud_id == 0) {
+        _db->update_file(*dto);
+    }
+    else {
+        _db->update_file_link(*dto);
     }
 }
 
