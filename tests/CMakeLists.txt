@@ -1,6 +1,5 @@
 find_package(Threads     REQUIRED)
 find_package(SQLite3     REQUIRED)
-find_package(nlohmann_json REQUIRED)
 
 include(FetchContent)
 FetchContent_Declare(
@@ -14,12 +13,10 @@ FetchContent_MakeAvailable(googletest)
 add_executable(DatabaseTests
   DatabaseTests.cpp
 )
-
 target_include_directories(DatabaseTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
   ${GTEST_INCLUDE_DIRS}
 )
-
 target_link_libraries(DatabaseTests PRIVATE
   SyncHarbor_core
   GTest::gtest_main
