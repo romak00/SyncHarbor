@@ -51,11 +51,15 @@ FetchContent_Declare(xxhash           GIT_REPOSITORY https://github.com/Cyan4973
 FetchContent_Declare(cpp-httplib      GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git GIT_TAG v0.20.0)
 FetchContent_Declare(watcher          GIT_REPOSITORY https://github.com/e-dant/watcher.git GIT_TAG release)
 
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(BUILD_LIB OFF         CACHE BOOL "" FORCE)
-set(BUILD_BIN OFF         CACHE BOOL "" FORCE)
-set(xxhash_BUILD_XXHSUM OFF CACHE BOOL "Disable building xxhsum binary" FORCE)
-set(xxhash_BUILD_SHARED OFF CACHE BOOL "Disable building shared lib" FORCE)
+set(BUILD_SHARED_LIBS                 OFF CACHE BOOL "" FORCE)
+set(BUILD_LIB                         OFF CACHE BOOL "" FORCE)
+set(BUILD_BIN                         OFF CACHE BOOL "" FORCE)
+set(xxhash_BUILD_XXHSUM               OFF CACHE BOOL "Disable building xxhsum binary" FORCE)
+set(xxhash_BUILD_SHARED               OFF CACHE BOOL "Disable building shared lib" FORCE)
+set(HTTPLIB_USE_ZSTD_IF_AVAILABLE     OFF CACHE BOOL "" FORCE)
+set(HTTPLIB_USE_ZLIB_IF_AVAILABLE     OFF CACHE BOOL "" FORCE)
+set(HTTPLIB_USE_BROTLI_IF_AVAILABLE   OFF CACHE BOOL "" FORCE)
+set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE  OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(
     nlohmann_json
