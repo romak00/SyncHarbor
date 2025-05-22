@@ -17,14 +17,38 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Bootstrap deps
-        run: scripts/bootstrap.sh
+      # Bootstrap
+      - name: Bootstrap deps (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash scripts/bootstrap.sh
 
-      - name: Configure (${{ matrix.config }})
-        run: scripts/build.sh ${{ matrix.config }} -- -DCMAKE_TOOLCHAIN_FILE=${{ matrix.os == 'windows-latest' && 'third_party/vcpkg/scripts/buildsystems/vcpkg.cmake' || '' }}
+      - name: Bootstrap deps (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\scripts\bootstrap.ps1 -UseVcpkg
 
-      - name: Run tests
-        run: scripts/test.sh ${{ matrix.config }}
+      # Configure & Build
+      - name: Configure & Build (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash scripts/build.sh ${{ matrix.config }} -- -DCMAKE_TOOLCHAIN_FILE=third_party/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      - name: Configure & Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\scripts\build.ps1 -Config ${{ matrix.config }}
+
+      # Run tests
+      - name: Run tests (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash scripts/test.sh ${{ matrix.config }}
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\scripts\test.ps1 -Config ${{ matrix.config }}
 
   package-and-release:
     needs: build-and-test
