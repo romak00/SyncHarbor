@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-  Runs ctest from the build directory.
+    Runs ctest from the build directory.
 .PARAMETER Config
-  Build configuration: Debug, RelWithDebInfo, or Release.
+    Build configuration: Debug, RelWithDebInfo, or Release.
 #>
 param(
-  [ValidateSet("Debug","RelWithDebInfo","Release")]
-  [string]$Config = "Debug"
+    [ValidateSet("Debug","RelWithDebInfo","Release")]
+    [string]$Config = "Debug"
 )
 
 Write-Host "=== Test: $Config ==="
