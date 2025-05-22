@@ -1,5 +1,9 @@
-build*
+/build/
 .vscode*
 *.sqlite3*
-change.json
 *SyncHarbor*
+*.cmake.user
+*.o
+*.a
+*.so
+*.dll

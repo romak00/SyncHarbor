@@ -106,7 +106,14 @@ private:
     static std::mutex _mutex;
 };
 
-#define LOG_DEBUG(component, ...)           Logger::get().log(LogLevel::DEBUG, component, __VA_ARGS__)
-#define LOG_INFO(component, ...)            Logger::get().log(LogLevel::INFO, component, __VA_ARGS__)
-#define LOG_WARNING(component, ...)         Logger::get().log(LogLevel::WARNING, component, __VA_ARGS__)
-#define LOG_ERROR(component, ...)           Logger::get().log(LogLevel::ERROR, component, __VA_ARGS__)
+#if CUSTOM_LOGGING_ENABLED
+    #define LOG_DEBUG(component, ...)           Logger::get().log(LogLevel::DEBUG, component, __VA_ARGS__)
+    #define LOG_INFO(component, ...)            Logger::get().log(LogLevel::INFO, component, __VA_ARGS__)
+    #define LOG_WARNING(component, ...)         Logger::get().log(LogLevel::WARNING, component, __VA_ARGS__)
+    #define LOG_ERROR(component, ...)           Logger::get().log(LogLevel::ERROR, component, __VA_ARGS__)
+#else
+    #define LOG_DEBUG(...)
+    #define LOG_INFO(...)
+    #define LOG_WARNING(...)
+    #define LOG_ERROR(...)
+#endif
