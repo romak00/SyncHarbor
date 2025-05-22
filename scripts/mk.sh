@@ -14,4 +14,4 @@ cmake --build . --parallel
 #ctest --output-on-failure
 
 cd ..
-#./cloudsync config-file-initial test-conf
+#./SyncHarbor config-file-initial test-conf

@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  release:
+    types: [created]
+
+jobs:
+  build-and-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        config: [Debug, RelWithDebInfo]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Bootstrap deps
+        run: scripts/bootstrap.sh
+
+      - name: Configure (${{ matrix.config }})
+        run: scripts/build.sh ${{ matrix.config }} -- -DCMAKE_TOOLCHAIN_FILE=${{ matrix.os == 'windows-latest' && 'third_party/vcpkg/scripts/buildsystems/vcpkg.cmake' || '' }}
+
+      - name: Run tests
+        run: scripts/test.sh ${{ matrix.config }}
+
+  package-and-release:
+    needs: build-and-test
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Bootstrap deps
+        run: scripts/bootstrap.sh
+
+      - name: Configure & Build Release
+        run: scripts/build.sh Release -- -DCMAKE_TOOLCHAIN_FILE=third_party/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      - name: Package with CPack
+        run: |
+          pushd build
+          cpack --config "$PWD/CPackConfig.cmake"
+          ls *.zip *.tar.gz *.exe *.dmg || true
+          popd
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Release Assets
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: |
+            build/*.zip
+            build/*.tar.gz
+            build/*.exe
+            build/*.dmg
+          asset_name: |
+            ${{ matrix.os }}-${{ github.ref_name }}.zip
+            ${{ matrix.os }}-${{ github.ref_name }}.tar.gz
+            ${{ matrix.os }}-${{ github.ref_name }}.exe
+            ${{ matrix.os }}-${{ github.ref_name }}.dmg
+          asset_content_type: application/octet-stream

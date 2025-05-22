@@ -565,7 +565,7 @@ void GoogleDrive::setupDownloadHandle(const std::unique_ptr<RequestHandle>& hand
     handle->addHeaders("Authorization: Bearer " + _access_token);
 
     auto path = _local_home_path / dto->rel_path.parent_path() /
-        (".-tmp-cloudsync-" + dto->rel_path.filename().string());
+        (".-tmp-SyncHarbor-" + dto->rel_path.filename().string());
 
     curl_easy_setopt(handle->_curl, CURLOPT_URL, url.c_str());
     handle->setCommonCURLOpt();
@@ -592,7 +592,7 @@ void GoogleDrive::setupDownloadHandle(const std::unique_ptr<RequestHandle>& hand
     handle->addHeaders("Authorization: Bearer " + _access_token);
 
     auto path = _local_home_path / dto->rel_path.parent_path() /
-        (".-tmp-cloudsync-" + dto->rel_path.filename().string());
+        (".-tmp-SyncHarbor-" + dto->rel_path.filename().string());
 
     curl_easy_setopt(handle->_curl, CURLOPT_URL, url.c_str());
     handle->setCommonCURLOpt();
@@ -959,7 +959,7 @@ int GoogleDrive::id() const {
 }
 
 bool GoogleDrive::ignoreTmp(const std::string& name) {
-    constexpr std::string_view tmp_prefix{ ".-tmp-cloudsync-" };
+    constexpr std::string_view tmp_prefix{ ".-tmp-SyncHarbor-" };
     if (name.size() >= tmp_prefix.size()
         && std::string_view(name).starts_with(tmp_prefix)) {
         return true;

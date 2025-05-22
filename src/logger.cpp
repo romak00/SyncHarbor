@@ -20,9 +20,9 @@ std::string ThreadNamer::getThreadName() {
 }
 
 Logger::Logger() {
-    addLogFile("debug", "cloudsync.debug.log");
-    addLogFile("error", "cloudsync.error.log");
-    addLogFile("general", "cloudsync.log");
+    addLogFile("debug", "SyncHarbor.debug.log");
+    addLogFile("error", "SyncHarbor.error.log");
+    addLogFile("general", "SyncHarbor.log");
 }
 
 Logger::~Logger() {
@@ -74,7 +74,7 @@ std::string Logger::formatMessage(LogLevel level, const std::string& component, 
     std::stringstream ss;
     ss << getTimestamp()
         << " [" << levelToString(level) << "]"
-        << " [Thread:"<< std::left << ThreadNamer::getThreadName() << "]"
+        << " [Thread:" << std::left << ThreadNamer::getThreadName() << "]"
         << " [" << std::left << component << "] "
         << message;
     return ss.str();

@@ -122,7 +122,7 @@ void Dropbox::setupDownloadHandle(const std::unique_ptr<RequestHandle>& handle, 
     handle->addHeaders("Dropbox-API-Arg: {\"path\": \"" + remote_path + "\"}");
 
     auto local_tmp_path = _local_home_path / dto->rel_path.parent_path() /
-        (".-tmp-cloudsync-" + dto->rel_path.filename().string());
+        (".-tmp-SyncHarbor-" + dto->rel_path.filename().string());
 
     curl_easy_setopt(handle->_curl, CURLOPT_URL, url.c_str());
     handle->setCommonCURLOpt();
@@ -144,7 +144,7 @@ void Dropbox::setupDownloadHandle(const std::unique_ptr<RequestHandle>& handle, 
     handle->addHeaders("Dropbox-API-Arg: {\"path\": \"" + remote_path + "\"}");
 
     auto local_tmp_path = _local_home_path / dto->rel_path.parent_path() /
-        (".-tmp-cloudsync-" + dto->rel_path.filename().string());
+        (".-tmp-SyncHarbor-" + dto->rel_path.filename().string());
 
     curl_easy_setopt(handle->_curl, CURLOPT_URL, url.c_str());
     handle->setCommonCURLOpt();

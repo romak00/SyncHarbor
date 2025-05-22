@@ -54,11 +54,11 @@ void LocalStorage::proccesUpdate(std::unique_ptr<FileUpdatedDTO>& dto, const std
             "LOCAL STORAGE",
             dto->rel_path.string(),
             "trying to rename from %s to %s",
-            (_local_home_dir.string() + "/" + dto->rel_path.parent_path().string() + "/.-tmp-cloudsync-" + dto->rel_path.filename().string()),
+            (_local_home_dir.string() + "/" + dto->rel_path.parent_path().string() + "/.-tmp-SyncHarbor-" + dto->rel_path.filename().string()),
             _local_home_dir.string() + "/" + dto->rel_path.string()
         );
         std::filesystem::rename(
-            _local_home_dir.string() + "/" + dto->rel_path.parent_path().string() + "/.-tmp-cloudsync-" + dto->rel_path.filename().string(),
+            _local_home_dir.string() + "/" + dto->rel_path.parent_path().string() + "/.-tmp-SyncHarbor-" + dto->rel_path.filename().string(),
             _local_home_dir / dto->rel_path
         );
 
@@ -127,7 +127,7 @@ void LocalStorage::proccesDelete(std::unique_ptr<FileDeletedDTO>& dto, const std
 }
 
 bool LocalStorage::ignoreTmp(const std::filesystem::path& path) {
-    constexpr std::string_view tmp_prefix{ ".-tmp-cloudsync-" };
+    constexpr std::string_view tmp_prefix{ ".-tmp-SyncHarbor-" };
     auto fn = path.filename().string();
     if (fn.size() >= tmp_prefix.size()
         && std::string_view(fn).starts_with(tmp_prefix)) {
@@ -374,7 +374,7 @@ bool LocalStorage::isDoc(const std::filesystem::path& path) const {
 }
 
 bool LocalStorage::thatFileTmpExists(const std::filesystem::path& path) {
-    static constexpr std::string_view our_prefix{ ".-tmp-cloudsync-" };
+    static constexpr std::string_view our_prefix{ ".-tmp-SyncHarbor-" };
 
     const std::string_view fn = path.filename().string();
     const std::filesystem::path pp = path.parent_path();
@@ -527,11 +527,11 @@ void LocalStorage::proccesUpload(std::unique_ptr<FileRecordDTO>& dto, const std:
             "LOCAL STORAGE",
             dto->rel_path.string(),
             "trying to rename from %s to %s",
-            (_local_home_dir.string() + "/" + dto->rel_path.parent_path().string() + "/.-tmp-cloudsync-" + dto->rel_path.filename().string()),
+            (_local_home_dir.string() + "/" + dto->rel_path.parent_path().string() + "/.-tmp-SyncHarbor-" + dto->rel_path.filename().string()),
             _local_home_dir.string() + "/" + dto->rel_path.string()
         );
         std::filesystem::rename(
-            _local_home_dir.string() + "/" + dto->rel_path.parent_path().string() + "/.-tmp-cloudsync-" + dto->rel_path.filename().string(),
+            _local_home_dir.string() + "/" + dto->rel_path.parent_path().string() + "/.-tmp-SyncHarbor-" + dto->rel_path.filename().string(),
             _local_home_dir / dto->rel_path
         );
 

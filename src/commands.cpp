@@ -56,6 +56,8 @@ LocalUploadCommand::LocalUploadCommand(const int cloud_id) {
 }
 
 void LocalUploadCommand::completionCallback(const std::unique_ptr<Database>& db, const std::shared_ptr<BaseStorage>& cloud) {
+
+    LOG_INFO("LOCAL UPLOAD %s started", this->getTarget());
     cloud->proccesUpload(_dto, "");
     for (auto& next_command : _next_commands) {
         int cloud_id = next_command->getId();
@@ -63,7 +65,7 @@ void LocalUploadCommand::completionCallback(const std::unique_ptr<Database>& db,
         _dto->cloud_id = cloud_id;
         next_command->setDTO(std::make_unique<FileRecordDTO>(*_dto));
     }
-    LOG_INFO("LOCAL UPLOAD", this->getTarget(), "completed");
+    LOG_INFO("LOCAL UPLOAD %s completed", this->getTarget());
 
     if (auto ch = owner()) {
         ch->onCommandFinished();

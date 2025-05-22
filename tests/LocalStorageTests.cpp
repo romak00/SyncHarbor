@@ -65,7 +65,7 @@ protected:
 };
 
 TEST_F(LocalStorageTest, DetectCreateFile) {
-    Logger::get().addLogFile("DetectCreateFile", "cloudsync.DetectCreateFile.log");
+    Logger::get().addLogFile("DetectCreateFile", "SyncHarbor.DetectCreateFile.log");
     auto file = tmp_dir / "a.txt";
     std::ofstream(file) << "hello";
     auto changes = waitChanges();
@@ -76,7 +76,7 @@ TEST_F(LocalStorageTest, DetectCreateFile) {
 }
 
 TEST_F(LocalStorageTest, DetectModifyFile) {
-    Logger::get().addLogFile("DetectModifyFile", "cloudsync.DetectModifyFile.log");
+    Logger::get().addLogFile("DetectModifyFile", "SyncHarbor.DetectModifyFile.log");
     auto file = tmp_dir / "b.txt";
     {
         std::ofstream(file) << "v1";
@@ -109,7 +109,7 @@ TEST_F(LocalStorageTest, DetectModifyFile) {
 }
 
 TEST_F(LocalStorageTest, DetectMoveFile) {
-    Logger::get().addLogFile("DetectMoveFile", "cloudsync.DetectMoveFile.log");
+    Logger::get().addLogFile("DetectMoveFile", "SyncHarbor.DetectMoveFile.log");
     auto oldp = tmp_dir / "c.txt";
     std::ofstream(oldp) << "x";
 
@@ -142,7 +142,7 @@ TEST_F(LocalStorageTest, DetectMoveFile) {
 }
 
 TEST_F(LocalStorageTest, EditorAtomicSave) {
-    Logger::get().addLogFile("EditorAtomicSave", "cloudsync.EditorAtomicSave.log");
+    Logger::get().addLogFile("EditorAtomicSave", "SyncHarbor.EditorAtomicSave.log");
     auto orig = tmp_dir / "e.txt";
     std::ofstream(orig) << "old";
 
@@ -163,7 +163,7 @@ TEST_F(LocalStorageTest, EditorAtomicSave) {
     };
     int global_id = db->add_file(dto);
 
-    auto tmpf = tmp_dir / ".-tmp-cloudsync-e.txt";
+    auto tmpf = tmp_dir / ".-tmp-SyncHarbor-e.txt";
     std::ofstream(tmpf) << "new";
 
     std::filesystem::remove(orig);
@@ -178,7 +178,7 @@ TEST_F(LocalStorageTest, EditorAtomicSave) {
 }
 
 TEST_F(LocalStorageTest, DetectDeleteFile) {
-    Logger::get().addLogFile("DetectDeleteFile", "cloudsync.DetectDeleteFile.log");
+    Logger::get().addLogFile("DetectDeleteFile", "SyncHarbor.DetectDeleteFile.log");
     auto file = tmp_dir / "f.txt";
     std::ofstream(file) << "foo";
 
@@ -208,7 +208,7 @@ TEST_F(LocalStorageTest, DetectDeleteFile) {
 }
 
 TEST_F(LocalStorageTest, DetectCreateDirectory) {
-    Logger::get().addLogFile("DetectCreateDirectory", "cloudsync.DetectCreateDirectory.log");
+    Logger::get().addLogFile("DetectCreateDirectory", "SyncHarbor.DetectCreateDirectory.log");
     auto dir = tmp_dir / "subdir";
     std::filesystem::create_directory(dir);
 
@@ -220,7 +220,7 @@ TEST_F(LocalStorageTest, DetectCreateDirectory) {
 }
 
 TEST_F(LocalStorageTest, DetectNestedCreate) {
-    Logger::get().addLogFile("DetectNestedCreate", "cloudsync.DetectNestedCreate.log");
+    Logger::get().addLogFile("DetectNestedCreate", "SyncHarbor.DetectNestedCreate.log");
     auto dir = tmp_dir / "x" / "y";
     std::filesystem::create_directories(dir);
     std::this_thread::sleep_for(50ms);
@@ -244,7 +244,7 @@ TEST_F(LocalStorageTest, DetectNestedCreate) {
 }
 
 TEST_F(LocalStorageTest, GetFileIdOnCreate) {
-    Logger::get().addLogFile("GetFileIdOnCreate", "cloudsync.GetFileIdOnCreate.log");
+    Logger::get().addLogFile("GetFileIdOnCreate", "SyncHarbor.GetFileIdOnCreate.log");
     auto file = tmp_dir / "g.txt";
     std::ofstream(file) << "hello";
 
