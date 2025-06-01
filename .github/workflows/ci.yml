@@ -28,6 +28,12 @@ jobs:
         shell: pwsh
         run: .\scripts\bootstrap.ps1 -UseVcpkg
 
+      - name: Install lcov (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lcov
+
       # Configure & Build
       - name: Configure & Build (Unix)
         if: runner.os != 'Windows'
@@ -72,45 +78,3 @@ jobs:
           }
           echo "==== END TEST LOGS ===="
 
-  package-and-release:
-    needs: build-and-test
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Bootstrap deps
-        run: scripts/bootstrap.sh
-
-      - name: Configure & Build Release
-        run: scripts/build.sh Release
-
-      - name: Package with CPack
-        run: |
-          pushd build
-          cpack --config "$PWD/CPackConfig.cmake"
-          ls *.zip *.tar.gz *.exe *.dmg || true
-          popd
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Release Assets
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: |
-            build/*.zip
-            build/*.tar.gz
-            build/*.exe
-            build/*.dmg
-          asset_name: |
-            ${{ matrix.os }}-${{ github.ref_name }}.zip
-            ${{ matrix.os }}-${{ github.ref_name }}.tar.gz
-            ${{ matrix.os }}-${{ github.ref_name }}.exe
-            ${{ matrix.os }}-${{ github.ref_name }}.dmg
-          asset_content_type: application/octet-stream

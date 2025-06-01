@@ -3,6 +3,8 @@
 #include <filesystem>
 #include <memory>
 #include "database.h"
+#include "utils.h"
+#include "request-handle.h"
 
 class Change;
 
@@ -25,7 +27,7 @@ public:
     virtual std::vector<std::unique_ptr<FileRecordDTO>> createPath(const std::filesystem::path& path, const std::filesystem::path& missing) = 0;
 
     virtual std::string buildAuthURL(int local_port) const = 0;
-    virtual void getRefreshToken(const std::string& code, const int local_port) = 0;
+    virtual std::string getRefreshToken(const std::string& code, const int local_port) = 0;
     virtual void refreshAccessToken() = 0;
     virtual void proccessAuth(const std::string& responce) = 0;
 

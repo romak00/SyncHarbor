@@ -1,17 +1,8 @@
 #pragma once
 
-#include <vector>
-#include <string>
-#include <filesystem>
-#include <atomic>
-#include <unordered_map>
-#include "database.h"
-#include "BaseStorage.h"
 #include "LocalStorage.h"
 #include "http-server.h"
 #include "cloud-factory.h"
-#include "change-factory.h"
-#include "conflict-resolver.h"
 
 class SyncManager {
 public:
@@ -23,7 +14,6 @@ public:
     SyncManager(
         const std::string& config_path,
         const std::string& db_file,
-        const std::filesystem::path& local_dir,
         Mode mode
     );
 
@@ -71,10 +61,6 @@ private:
 
     void handleChange(std::shared_ptr<Change> change);
 
-    bool ensureParentDirectories(const std::filesystem::path& path);
-
-    void setRawSignal();
-
     void ensureRootsExist();
 
     void startChange(const std::filesystem::path& path, std::shared_ptr<Change> change);
@@ -115,4 +101,6 @@ private:
     int _num_clouds;
 
     Mode _mode;
+
+    FRIEND_TEST(SyncManagerUnitTest, DirectoryIsWritableTrue);
 };

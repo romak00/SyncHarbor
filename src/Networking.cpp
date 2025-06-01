@@ -48,6 +48,12 @@ void HttpClient::syncRequest(const std::unique_ptr<RequestHandle>& handle) {
 }
 
 void HttpClient::shutdown() {
+    bool was_running = _running.exchange(false);
+    if (!was_running) {
+        LOG_WARNING("HttpClient", "shutdown() called but large_worker not running");
+        return;
+    }
+
     LOG_INFO("HttpClient", "Shutting down...");
 
     _should_stop.store(true, std::memory_order_release);
@@ -59,6 +65,9 @@ void HttpClient::shutdown() {
 
     LOG_INFO("HttpClient", "Worker thread joined, cleaning up CURL");
 
+    curl_slist_free_all(RequestHandle::_global_resolve);
+    RequestHandle::_global_resolve = nullptr;
+
     curl_multi_cleanup(_large_multi_handle);
     curl_global_cleanup();
 
@@ -68,6 +77,13 @@ void HttpClient::shutdown() {
 }
 
 void HttpClient::start() {
+    bool was_running = _running.exchange(true);
+    if (was_running) {
+        LOG_WARNING("HttpClient", "start() called but large_worker already running");
+        return;
+    }
+
+    _should_stop.store(false, std::memory_order_release);
     LOG_INFO("HttpClient", "Starting large worker...");
     _large_worker = std::make_unique<std::thread>(&HttpClient::largeRequestsWorker, this);
 }
@@ -115,7 +131,7 @@ void HttpClient::largeRequestsWorker() {
     LOG_INFO("HttpClient", "Started");
     int still_running = 0;
 
-    while (!_should_stop || !_large_queue.empty() || still_running > 0 || !_delayed_requests.empty()) {
+    while (!_should_stop.load(std::memory_order_acquire) || !_large_queue.empty() || still_running > 0 || !_delayed_requests.empty()) {
         std::unique_ptr<ICommand> request_command;
         if (_large_active_count.isIdle()) {
             if (_large_queue.pop(request_command)) {

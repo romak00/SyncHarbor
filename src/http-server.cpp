@@ -42,7 +42,7 @@ LocalHttpServer::~LocalHttpServer() {
 }
 
 void LocalHttpServer::startListening() {
-    if (_running.exchange(true, std::memory_order::release)) {
+    if (_running.exchange(true)) {
         LOG_WARNING("WebhookServer", "startListening called but server already running");
         return;
     }
@@ -62,7 +62,7 @@ void LocalHttpServer::stopListening() {
     if (_listener_thread && _listener_thread->joinable()) {
         _listener_thread->join();
     }
-    _running = false;
+    _running.store(false);
 }
 
 int LocalHttpServer::getPort() const {

@@ -240,17 +240,14 @@
 SyncManager::SyncManager(
     const std::string& config_path,
     const std::string& db_file,
-    const std::filesystem::path& local_dir,
     Mode mode
 ) :
     _config_path(config_path),
     _db_file(db_file),
-    _local_dir(local_dir),
     _mode(mode),
     _should_exit(false)
 {
     _db = std::make_shared<Database>(_db_file);
-    _local_dir = local_dir;
     if (mode == Mode::InitialSync) {
         loadConfig();
     }
@@ -322,6 +319,7 @@ void SyncManager::loadConfig() {
     nlohmann::json config_json;
     config_file >> config_json;
     _cloud_configs = config_json["clouds"];
+    _local_dir = config_json["local"].get<std::string>();
 
     for (const auto& cloud : _cloud_configs) {
         std::string name = cloud["name"];
@@ -367,6 +365,8 @@ void SyncManager::loadConfig() {
 void SyncManager::setupClouds() {
     auto clouds = _db->get_clouds();
 
+    this->setLocalDir(_db->getLocalDir());
+
     for (auto& cloud : clouds) {
         int cloud_id = cloud["config_id"];
         std::string type_str = cloud["type"].get<std::string>();
@@ -404,7 +404,7 @@ void SyncManager::setupClouds() {
 
 void SyncManager::setLocalDir(const std::string& path) {
     std::filesystem::path input_path = path;
-    std::filesystem::path absolute_path = std::filesystem::canonical(input_path);
+    std::filesystem::path absolute_path = std::filesystem::absolute(input_path);
 
     if (std::filesystem::exists(absolute_path)) {
         if (!std::filesystem::is_directory(absolute_path)) {
@@ -415,7 +415,7 @@ void SyncManager::setLocalDir(const std::string& path) {
         std::filesystem::create_directories(absolute_path);
     }
 
-    _local_dir = absolute_path;
+    _local_dir = std::filesystem::canonical(absolute_path);
     _local = std::make_shared<LocalStorage>(_local_dir, 0, _db);
 }
 
@@ -493,6 +493,10 @@ void SyncManager::initialSync() {
     CallbackDispatcher::get().start();
     HttpClient::get().setClouds(clouds);
     HttpClient::get().start();
+
+    _db->addLocalDir(_local_dir.string());
+
+    _num_clouds = _clouds.size();
 
     LOG_INFO("SyncManager", "Scanning local initialFiles()");
 
@@ -948,11 +952,15 @@ void SyncManager::registerCloud(const std::string& cloud_name, const CloudProvid
     openUrl(url);
     std::string code = _http_server->waitForCode();
 
-    _clouds[cloud_id]->getRefreshToken(code, _http_server->getPort());
+    std::string refresh_token = _clouds[cloud_id]->getRefreshToken(code, _http_server->getPort());
+
+    nlohmann::json saved = _db->get_cloud_config(cloud_id);
+    saved["refresh_token"] = refresh_token;
+    _db->update_cloud_data(cloud_id, saved);
+
     _clouds[cloud_id]->ensureRootExists();
 
     _http_server->stopListening();
-
 }
 
 void SyncManager::openUrl(const std::string& url) {

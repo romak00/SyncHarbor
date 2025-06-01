@@ -1,16 +1,15 @@
 #pragma once
 
 #include <string>
-#include <fstream>
 #include <mutex>
-#include <chrono>
-#include <iomanip>
-#include <sstream>
-#include <thread>
 #include <map>
+#include <thread>
 #include <unordered_map>
-#include <atomic>
+#include <sstream>
 #include <iostream>
+#include <iomanip>
+#include <fstream>
+#include "utils.h"
 
 enum class LogLevel {
     DBG,
@@ -86,6 +85,7 @@ private:
     std::map<std::string, LogDestination> _logs;
     bool _console_enabled = false;
     LogLevel _global_level = LogLevel::DBG;
+
 };
 
 class CloudResolver {

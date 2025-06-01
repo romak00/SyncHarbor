@@ -1,8 +1,8 @@
 #pragma once
 
-#include "BaseStorage.h"
-#include <string>
-#include <iostream>
+#include "change-factory.h"
+#include "event-registry.h"
+#include <unordered_set>
 
 class Dropbox : public BaseStorage {
 public:
@@ -78,7 +78,7 @@ public:
 
     std::string buildAuthURL(int local_port) const override;
 
-    void getRefreshToken(const std::string& code, const int local_port) override;
+    std::string getRefreshToken(const std::string& code, const int local_port) override;
 
     void ensureRootExists() override;
 

@@ -11,10 +11,12 @@ CallbackDispatcher& CallbackDispatcher::get() {
 CallbackDispatcher::CallbackDispatcher() {}
 
 void CallbackDispatcher::finish() {
-    if (!_should_stop.exchange(false)) {
-        LOG_WARNING("CallbackDispatcher", "finish called but worker not running");
+    bool was_running = _running.exchange(false);
+    if (!was_running) {
+        LOG_WARNING("CallbackDispatcher", "finish() called but dispatcher not running");
         return;
     }
+    
     LOG_INFO("CallbackDispatcher", "Shutting down dispatcher...");
     _should_stop.store(true, std::memory_order_release);
     _queue.close();
@@ -24,6 +26,13 @@ void CallbackDispatcher::finish() {
 }
 
 void CallbackDispatcher::start() {
+    bool was_running = _running.exchange(true);
+    if (was_running) {
+        LOG_WARNING("CallbackDispatcher", "start() called but dispatcher already running");
+        return;
+    }
+
+    _should_stop.store(false, std::memory_order_release);
     LOG_INFO("HttpClient", "Starting large worker...");
     _worker = std::make_unique<std::thread>(&CallbackDispatcher::worker, this);
 }

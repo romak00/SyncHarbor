@@ -2,11 +2,9 @@
 
 #include <sqlite3.h>
 #include <vector>
-#include <chrono>
+#include <gtest/gtest_prod.h>
 #include "utils.h"
-
-class ICommand;
-
+#include <nlohmann/json.hpp>
 
 class Database {
 public:
@@ -23,8 +21,6 @@ public:
     std::filesystem::path getPathByGlobalId(const int search_global_id);
     std::string get_cloud_file_id_by_cloud_id(const int cloud_id, const int global_id);
     std::vector<nlohmann::json> get_clouds();
-    std::string get_cloud_type(const int cloud_id);
-    std::string get_cloud_parent_id_by_cloud_id(const int cloud_id, const std::string& cloud_file_id);
 
     std::unique_ptr<FileRecordDTO> getFileByCloudIdAndCloudFileId(const int cloud_id, const std::string& cloud_file_id);
     std::unique_ptr<FileRecordDTO> getFileByCloudIdAndGlobalId(const int cloud_id, const int global_id);
@@ -51,10 +47,11 @@ public:
 
     std::filesystem::path getMissingPathPart(const std::filesystem::path& path, const int num_clouds);
 
-    std::string getParentId(const int cloud_id, const int global_id);
-
     bool isInitialSyncDone();
     void markInitialSyncDone();
+
+    void addLocalDir(const std::string& local_dir);
+    std::string getLocalDir();
 
 
 private:
@@ -62,5 +59,25 @@ private:
     void check_rc(int rc, const std::string& context);
     void create_tables();
     void execute(const std::string& sql);
+
+    FRIEND_TEST(DatabaseUnitTest, GetCloudsEmptyAfterDelete);
+    FRIEND_TEST(DatabaseUnitTest, ExecuteBadSql);
+    FRIEND_TEST(DatabaseUnitTest, CheckRcThrows);
+    FRIEND_TEST(DatabaseUnitTest, GetCloudConfigPrepareError);
+    FRIEND_TEST(DatabaseUnitTest, GetCloudsPrepareError);
+    FRIEND_TEST(DatabaseUnitTest, GetGlobalIdByFileIdPrepareError);
+    FRIEND_TEST(DatabaseUnitTest, GetGlobalIdByPathPrepareError);
+    FRIEND_TEST(DatabaseUnitTest, GetFileByFileIdPrepareError);
+    FRIEND_TEST(DatabaseUnitTest, GetFileByPathPrepareError);
+    FRIEND_TEST(DatabaseUnitTest, QuickPathCheckPrepareError);
+    FRIEND_TEST(DatabaseUnitTest, GetCloudFileIdByPathPrepareError);
+    FRIEND_TEST(DatabaseUnitTest, GetParentIdPrepareError);
+    FRIEND_TEST(DatabaseUnitTest, GetCloudFileIdByCloudIdPrepareError);
+    FRIEND_TEST(DatabaseUnitTest, ExecuteAndCheckRc);
+    FRIEND_TEST(DatabaseUnitTest, GetPathByGlobalIdNotFound);
+    FRIEND_TEST(DatabaseUnitTest, UpdateCloudDataPrepareError);
+    FRIEND_TEST(DatabaseUnitTest, UpdateFileLinkAndFilePrepareError);
+    FRIEND_TEST(DatabaseUnitTest, UpdateFileMovedDTOPrepareError);
+
 };
 

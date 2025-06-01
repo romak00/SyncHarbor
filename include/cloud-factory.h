@@ -1,10 +1,9 @@
 #pragma once
 
-#include "BaseStorage.h"
+#include "dropbox.h"
+#include "google.h"
 
 enum class CloudProviderType;
-class GoogleDrive;
-class Dropbox;
 
 class CloudFactory {
 public:

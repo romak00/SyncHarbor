@@ -1,4 +1,5 @@
 #include "LocalStorage.h"
+#include "logger.h"
 
 uint64_t LocalStorage::getFileId(const std::filesystem::path& path) const {
 #ifdef _WIN32
@@ -54,11 +55,11 @@ void LocalStorage::proccesUpdate(std::unique_ptr<FileUpdatedDTO>& dto, const std
             "LOCAL STORAGE",
             dto->rel_path.string(),
             "trying to rename from %s to %s",
-            (_local_home_dir.string() + "/" + dto->rel_path.parent_path().string() + "/.-tmp-SyncHarbor-" + dto->rel_path.filename().string()),
-            _local_home_dir.string() + "/" + dto->rel_path.string()
+            (_local_home_dir / dto->rel_path.parent_path() / (".-tmp-SyncHarbor-" + dto->rel_path.filename().string())).string(),
+            (_local_home_dir  / dto->rel_path).string()
         );
         std::filesystem::rename(
-            _local_home_dir.string() + "/" + dto->rel_path.parent_path().string() + "/.-tmp-SyncHarbor-" + dto->rel_path.filename().string(),
+            _local_home_dir / dto->rel_path.parent_path() / (".-tmp-SyncHarbor-" + dto->rel_path.filename().string()),
             _local_home_dir / dto->rel_path
         );
 
@@ -71,6 +72,7 @@ void LocalStorage::proccesUpdate(std::unique_ptr<FileUpdatedDTO>& dto, const std
         dto->cloud_file_modified_time = convertSystemTime(full);
         dto->cloud_id = _id;
     }
+    _db->update_file(*dto);
 }
 
 void LocalStorage::proccesMove(std::unique_ptr<FileMovedDTO>& dto, const std::string& response) const {
@@ -127,12 +129,36 @@ void LocalStorage::proccesDelete(std::unique_ptr<FileDeletedDTO>& dto, const std
 }
 
 bool LocalStorage::ignoreTmp(const std::filesystem::path& path) {
-    constexpr std::string_view tmp_prefix{ ".-tmp-SyncHarbor-" };
-    auto fn = path.filename().string();
-    if (fn.size() >= tmp_prefix.size()
-        && std::string_view(fn).starts_with(tmp_prefix)) {
-        return true;
+    std::string fn = path.filename().string();
+
+    static constexpr std::array<std::string_view, 5> prefixes = {
+        ".-tmp-SyncHarbor-",
+        ".goutputstream-",
+        ".kate-swp",
+        ".#",
+        ".~lock."
+    };
+
+    static constexpr std::array<std::string_view, 8> suffixes = {
+        ".swp", ".swo", ".swx",
+        ".tmp", ".temp",
+        ".bak", ".orig",
+        "~"
+    };
+
+    for (auto p : prefixes) {
+        if (fn.size() >= p.size() && fn.rfind(p, 0) == 0) {
+            return true;
+        }
     }
+
+    for (auto s : suffixes) {
+        if (fn.size() >= s.size() &&
+            fn.compare(fn.size() - s.size(), s.size(), s) == 0) {
+            return true;
+        }
+    }
+
     return false;
 }
 
@@ -189,7 +215,7 @@ std::vector<std::unique_ptr<FileRecordDTO>> LocalStorage::createPath(const std::
                 getFileId(accum)
             );
 
-            _expected_events.add(accum.lexically_relative(_local_home_dir), ChangeType::New);
+            _expected_events.add(accum, ChangeType::New);
 
             created.push_back(std::move(dto));
         }
@@ -391,17 +417,16 @@ bool LocalStorage::isDoc(const std::filesystem::path& path) const {
     return exts.contains(ext);
 }
 
-bool LocalStorage::thatFileTmpExists(const std::filesystem::path& path) {
+bool LocalStorage::thatFileTmpExists(const std::filesystem::path& path) const {
     static constexpr std::string_view our_prefix{ ".-tmp-SyncHarbor-" };
 
-    const std::string_view fn = path.filename().string();
+    const std::string fn = path.filename().string();
     const std::filesystem::path pp = path.parent_path();
 
     static constexpr std::array<std::string_view, 6> prefixes{
         our_prefix,
         ".goutputstream-",
         ".kate-swp",
-        ".#",
         ".#",
         ".~lock."
     };
@@ -551,7 +576,6 @@ void LocalStorage::proccesUpload(std::unique_ptr<FileRecordDTO>& dto, const std:
     if (dto->cloud_id != 0) {
         LOG_DEBUG(
             "LOCAL STORAGE",
-            dto->rel_path.string(),
             "trying to rename from %s to %s",
             (_local_home_dir.string() + "/" + dto->rel_path.parent_path().string() + "/.-tmp-SyncHarbor-" + dto->rel_path.filename().string()),
             _local_home_dir.string() + "/" + dto->rel_path.string()
@@ -571,6 +595,7 @@ void LocalStorage::proccesUpload(std::unique_ptr<FileRecordDTO>& dto, const std:
         dto->cloud_id = _id;
 
         int global_id = _db->add_file(*dto);
+        dto->global_id = global_id;
         cloud_dto->global_id = global_id;
         _db->add_file_link(*cloud_dto);
     }

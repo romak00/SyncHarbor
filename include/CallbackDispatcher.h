@@ -1,7 +1,9 @@
 #pragma once
 
 #include "BaseStorage.h"
-#include "utils.h"
+#include "active-count.h"
+#include "thread-safe-queue.h"
+#include <thread>
 
 class ICommand;
 
@@ -46,6 +48,7 @@ private:
     std::unique_ptr<Database> _db;
 
     std::atomic<bool> _should_stop{ false };
+    std::atomic<bool> _running{ false };
 
     ActiveCount _active_count;
 

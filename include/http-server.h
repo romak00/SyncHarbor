@@ -1,15 +1,12 @@
 #pragma once
 
-#include "BaseStorage.h"
-#include "Networking.h"
-#include "google.h"
-#include "dropbox.h"
 #include "httplib.h"
 
-#include <map>
 #include <atomic>
 #include <thread>
 #include <string>
+#include <mutex>
+#include <condition_variable>
 
 
 class LocalHttpServer {

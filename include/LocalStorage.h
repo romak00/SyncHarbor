@@ -1,13 +1,13 @@
 #pragma once
 
-#include "BaseStorage.h"
 #include "change-factory.h"
+#include "event-registry.h"
 #include "wtr/watcher.hpp" 
-#include "logger.h"
+#include <unordered_set>
 
 #define XXH_INLINE_ALL
 #include <xxhash.h>
-
+#include <gtest/gtest_prod.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -45,7 +45,7 @@ public:
     std::vector<std::unique_ptr<FileRecordDTO>> createPath(const std::filesystem::path& path, const std::filesystem::path& missing) override;
 
     std::string buildAuthURL(int local_port) const override { return ""; }
-    void getRefreshToken(const std::string& code, const int local_port) override {}
+    std::string getRefreshToken(const std::string& code, const int local_port) override {}
     void refreshAccessToken() override {}
     void proccessAuth(const std::string& responce) override {}
 
@@ -67,14 +67,45 @@ public:
 
     void ensureRootExists() override {}
 
+    void setOnChange(std::function<void()> cb) override;
+private:
+
+    FRIEND_TEST(LocalStorageUnitTest, GetFileIdNonexistent);
+    FRIEND_TEST(LocalStorageUnitTest, GetHomeDir);
+    FRIEND_TEST(LocalStorageUnitTest, FromWatcherTime);
+    FRIEND_TEST(LocalStorageUnitTest, ComputeFileHashNonexistent);
+    FRIEND_TEST(LocalStorageUnitTest, ComputeFileHashChanges);
+    FRIEND_TEST(ThatFileTmpExistsTest, DetectTmpNeighbor);
+    FRIEND_TEST(IsDocTest, ClassifyByExtension);
+    FRIEND_TEST(LocalStorageUnitTest, OnFsEventAndProccessChanges);
+    FRIEND_TEST(LocalStorageUnitTest, ProccesUpdateRemote);
+    FRIEND_TEST(LocalStorageUnitTest, ProccesMoveRemote);
+    FRIEND_TEST(LocalStorageUnitTest, ProccesMoveCloudDirectoryRecursive);
+    FRIEND_TEST(LocalStorageUnitTest, HandleDeletedTrueDelete);
+    FRIEND_TEST(LocalStorageUnitTest, HandleDeletedIgnoredBecauseExpected);
+    FRIEND_TEST(LocalStorageUnitTest, HandleRenamedNoAssociatedCreatesNew);
+    FRIEND_TEST(LocalStorageUnitTest, HandleUpdatedFakeAndReal);
+    FRIEND_TEST(LocalStorageUnitTest, OnFsEventWatcherPathType);
+    FRIEND_TEST(LocalStorageUnitTest, HandleCreatedExpectedNew);
+    FRIEND_TEST(LocalStorageUnitTest, HandleCreatedIgnoredTmp);
+    FRIEND_TEST(LocalStorageUnitTest, HandleMovedExpectedMove);
+    FRIEND_TEST(LocalStorageUnitTest, HandleMovedIgnoredTmpBoth);
+    FRIEND_TEST(LocalStorageUnitTest, HandleMovedIgnoredTmpThenUpdate);
+    FRIEND_TEST(LocalStorageUnitTest, HandleMovedUnknownFileIdCreatesNew);
+    FRIEND_TEST(LocalStorageUnitTest, HandleMovedTrueMoved);
+
+    FRIEND_TEST(LocalStorageIntegrationTest, DetectModifyFile);
+    FRIEND_TEST(LocalStorageIntegrationTest, DetectMoveFile);
+    FRIEND_TEST(LocalStorageIntegrationTest, EditorAtomicSave);
+    FRIEND_TEST(LocalStorageIntegrationTest, DetectDeleteFile);
+    FRIEND_TEST(LocalStorageIntegrationTest, GetFileIdOnCreate);
+
+
+
     uint64_t getFileId(const std::filesystem::path& p) const;
     uint64_t computeFileHash(const std::filesystem::path& path, uint64_t seed = 0) const;
     void onFsEvent(const wtr::event& e);
-
-
     bool isDoc(const std::filesystem::path& path) const;
-
-    friend class LocalStorageTest;
 
     void handleRenamed(const FileEvent& evt);
 
@@ -84,13 +115,9 @@ public:
     void handleMoved(const FileEvent& evt);
 
     std::time_t fromWatcherTime(const long long);
-
     bool ignoreTmp(const std::filesystem::path& path);
 
-    void setOnChange(std::function<void()> cb) override;
-private:
-
-    bool thatFileTmpExists(const std::filesystem::path& path);
+    bool thatFileTmpExists(const std::filesystem::path& path) const;
 
     ThreadSafeQueue<std::shared_ptr<Change>> _changes_queue;
     ThreadSafeQueue<FileEvent> _events_buff;

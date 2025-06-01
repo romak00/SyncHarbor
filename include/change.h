@@ -35,7 +35,7 @@ public:
 
     Change(const Change& other) = delete;
     Change(Change&& other) noexcept;
-    Change& operator=(const Change&) = delete;
+    Change& operator=(const Change& other) = delete;
     Change& operator=(Change&& other) noexcept;
 
     void setOnComplete(std::function<void(std::vector<std::shared_ptr<Change>>&& dependents)> cb);

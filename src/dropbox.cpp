@@ -1,7 +1,6 @@
 #include "dropbox.h"
 #include "logger.h"
 #include "Networking.h"
-#include "change-factory.h"
 
 Dropbox::Dropbox(
     const std::string& client_id,
@@ -308,24 +307,18 @@ std::vector<std::unique_ptr<FileRecordDTO>> Dropbox::createPath(const std::files
 }
 
 void Dropbox::setupDeleteHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileDeletedDTO>& dto) const {
-    auto makeRemote = [this](const std::filesystem::path& rel) {
-        std::filesystem::path p = _home_path / rel;
-        std::string s = p.generic_string();
-        if (s.empty() || s[0] != '/')
-            s = "/" + s;
-        return s;
-        };
+    auto rem = [this](const std::filesystem::path& rel) {
+        auto p = (_home_path / rel).generic_string();
+        return p[0] == '/' ? p : "/" + p;
+        }(dto->rel_path);
 
-    nlohmann::json body = {
-        {"path", makeRemote(dto->rel_path)}
-    };
-
-    std::string body_str = body.dump();
+    nlohmann::json j = { {"path", rem} };
+    auto s = j.dump();
 
     curl_easy_setopt(handle->_curl, CURLOPT_URL,
         "https://api.dropboxapi.com/2/files/delete_v2");
     curl_easy_setopt(handle->_curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(handle->_curl, CURLOPT_POSTFIELDS, body_str.c_str());
+    curl_easy_setopt(handle->_curl, CURLOPT_COPYPOSTFIELDS, s.c_str());
 
     handle->addHeaders("Authorization: Bearer " + _access_token);
     handle->addHeaders("Content-Type: application/json");
@@ -484,6 +477,9 @@ void Dropbox::proccesUpdate(std::unique_ptr<FileUpdatedDTO>& dto, const std::str
         dto->cloud_hash_check_sum = j.value("content_hash", std::string{});
         dto->size = j.value("size", 0LL);
     }
+    else {
+        dto->cloud_hash_check_sum = std::string{};
+    }
 }
 
 void Dropbox::proccesMove(std::unique_ptr<FileMovedDTO>& dto, const std::string& response) const {
@@ -527,7 +523,7 @@ std::string Dropbox::buildAuthURL(int local_port) const {
     curl_free(enc_redirect);
     return oss.str();
 }
-void Dropbox::getRefreshToken(const std::string& code, const int local_port) {
+std::string Dropbox::getRefreshToken(const std::string& code, const int local_port) {
     auto handle = std::make_unique<RequestHandle>();
 
     std::string post_fields =
@@ -544,6 +540,8 @@ void Dropbox::getRefreshToken(const std::string& code, const int local_port) {
 
     HttpClient::get().syncRequest(handle);
     proccessAuth(handle->_response);
+
+    return _refresh_token;
 }
 
 void Dropbox::refreshAccessToken() {
@@ -693,7 +691,7 @@ std::vector<std::shared_ptr<Change>> Dropbox::proccessChanges() {
 
             std::string path_str = entry.value("path_display", std::string{});
             std::filesystem::path path = path_str;
-            std::filesystem::path rel_path = std::filesystem::relative(path, _home_path);
+            std::filesystem::path rel_path = path.lexically_relative(_home_path);
 
             if (rel_path.empty() || rel_path == std::filesystem::path(".")) {
                 continue;

@@ -1,8 +1,7 @@
 #pragma once
 
-#include "BaseStorage.h"
-#include <string>
-#include <iostream>
+#include "change-factory.h"
+#include "event-registry.h"
 
 struct GoogleDocMimeInfo {
     std::string cloud_mime_type;
@@ -41,7 +40,18 @@ public:
         const std::string& start_page_token
     );
 
-    //void initial_config() override;
+    GoogleDrive(
+        const std::string& client_id,
+        const std::string& client_secret,
+        const std::string& refresh_token,
+        const std::filesystem::path& home_dir,
+        const std::filesystem::path& local_home_dir,
+        const std::shared_ptr<Database>& db_conn,
+        const int cloud_id,
+        const std::string& start_page_token,
+        bool test
+    );
+
     void setupUploadHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileRecordDTO>& dto) const override;
 
     void setupUpdateHandle(const std::unique_ptr<RequestHandle>& handle, const std::unique_ptr<FileUpdatedDTO>& dto) const override;
@@ -79,7 +89,7 @@ public:
 
     std::string buildAuthURL(int local_port) const override;
 
-    void getRefreshToken(const std::string& code, const int local_port) override;
+    std::string getRefreshToken(const std::string& code, const int local_port) override;
 
     void proccessAuth(const std::string& responce) override;
 
@@ -88,6 +98,8 @@ public:
     void ensureRootExists() override;
 
     void setOnChange(std::function<void()> cb) override;
+
+    void setTestApiBaseUrl(const std::string& url);
 private:
     std::optional<GoogleDocMimeInfo> getGoogleDocMimeByExtension(const std::filesystem::path& path) const;
 
@@ -104,6 +116,10 @@ private:
     std::string _access_token;
     std::string _home_dir_id;
     std::string _page_token;
+
+    std::string _api_base_url = "https://www.googleapis.com";
+    std::string _auth_base_url = "https://oauth2.googleapis.com";
+    std::string _acc_base_url = "https://accounts.google.com";
 
     ThreadSafeQueue<std::vector<nlohmann::json>> _events_buff;
     mutable ThreadSafeEventsRegistry _expected_events;

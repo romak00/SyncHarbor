@@ -1,6 +1,4 @@
 #include "logger.h"
-#include <iostream>
-#include <filesystem>
 
 std::map<std::thread::id, std::string> ThreadNamer::_thread_names;
 std::mutex ThreadNamer::_mutex;
@@ -20,9 +18,6 @@ std::string ThreadNamer::getThreadName() {
 }
 
 Logger::Logger() {
-    addLogFile("debug", "SyncHarbor.debug.log");
-    addLogFile("error", "SyncHarbor.error.log");
-    addLogFile("general", "SyncHarbor.log");
 }
 
 Logger::~Logger() {
@@ -35,7 +30,9 @@ Logger::~Logger() {
 }
 
 void Logger::log(LogLevel level, const std::string& component, const std::string& message) {
-    if (level < _global_level) return;
+    if (level < _global_level) {
+        return;
+    }
     std::string formatted = formatMessage(level, component, message);
     output(formatted, level);
 }
@@ -63,10 +60,10 @@ void Logger::setGlobalLogLevel(LogLevel level) {
     _global_level = level;
 }
 
-void Logger::setLogLevelFor(const std::string& logName, LogLevel level) {
+void Logger::setLogLevelFor(const std::string& log_name, LogLevel level) {
     std::lock_guard<std::mutex> lock(_mutex);
-    if (_logs.count(logName)) {
-        _logs[logName].level = level;
+    if (_logs.count(log_name)) {
+        _logs[log_name].level = level;
     }
 }
 

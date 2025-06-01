@@ -1,16 +1,10 @@
 #pragma once
 
-#include <curl/curl.h>
-#include <memory>
-#include <mutex>
-#include <condition_variable>
 #include <thread>
-#include <chrono>
-#include <unordered_map>
-#include <queue>
-#include <vector>
-#include "utils.h"
+#include "request-handle.h"
 #include "BaseStorage.h"
+#include "thread-safe-queue.h"
+#include "active-count.h"
 
 class ICommand;
 
@@ -45,6 +39,7 @@ private:
     void checkDelayedRequests();
 
     std::atomic<bool> _should_stop{ false };
+    std::atomic<bool> _running{ false };
     std::unordered_map<CURL*, std::unique_ptr<ICommand>> _active_handles;
     std::vector<std::unique_ptr<ICommand>> _delayed_requests;
 

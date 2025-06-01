@@ -1,23 +1,40 @@
 cmake_minimum_required(VERSION 3.20...3.31)
 project(SyncHarbor VERSION 0.1 LANGUAGES CXX)
 
+option(ENABLE_COVERAGE "Enable code coverage flags" OFF)
+
+if (ENABLE_COVERAGE)
+  if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    message(STATUS ">>> Coverage enabled: adding --coverage flags")
+    set(CMAKE_CXX_FLAGS_DEBUG   "${CMAKE_CXX_FLAGS_DEBUG}   --coverage -O0")
+    set(CMAKE_C_FLAGS_DEBUG     "${CMAKE_C_FLAGS_DEBUG}     --coverage -O0")
+    set(CMAKE_EXE_LINKER_FLAGS   "${CMAKE_EXE_LINKER_FLAGS}   --coverage")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} --coverage")
+  else()
+    message(WARNING "Coverage requested but unsupported compiler")
+  endif()
+endif()
+
 set(CMAKE_CONFIGURATION_TYPES "Debug;Release;RelWithDebInfo" CACHE STRING "" FORCE)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type" FORCE)
 endif()
 
-option(ENABLE_LOGGING     "Enable custom logging"        OFF)
+option(ENABLE_LOGGING     "Enable custom logging"       OFF)
 option(ENABLE_DEBUG_TOOLS "Enable extra debug checks"   OFF)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  add_compile_definitions(WITH_DEV_MODES)
     set(ENABLE_LOGGING     ON  CACHE BOOL "" FORCE)
     set(ENABLE_DEBUG_TOOLS ON  CACHE BOOL "" FORCE)
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION FALSE)
 elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
+    add_compile_definitions(-DNDEBUG)
     set(ENABLE_LOGGING     OFF CACHE BOOL "" FORCE)
     set(ENABLE_DEBUG_TOOLS OFF CACHE BOOL "" FORCE)
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    add_compile_definitions(-DNDEBUG WITH_DEV_MODES)
     set(ENABLE_LOGGING     ON CACHE BOOL "" FORCE)
     set(ENABLE_DEBUG_TOOLS ON  CACHE BOOL "" FORCE)
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
@@ -54,8 +71,8 @@ FetchContent_Declare(watcher          GIT_REPOSITORY https://github.com/e-dant/w
 set(BUILD_SHARED_LIBS                 OFF CACHE BOOL "" FORCE)
 set(BUILD_LIB                         OFF CACHE BOOL "" FORCE)
 set(BUILD_BIN                         OFF CACHE BOOL "" FORCE)
-set(xxhash_BUILD_XXHSUM               OFF CACHE BOOL "Disable building xxhsum binary" FORCE)
-set(xxhash_BUILD_SHARED               OFF CACHE BOOL "Disable building shared lib" FORCE)
+set(xxhash_BUILD_XXHSUM               OFF CACHE BOOL "" FORCE)
+set(xxhash_BUILD_SHARED               OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_ZSTD_IF_AVAILABLE     OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_ZLIB_IF_AVAILABLE     OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_BROTLI_IF_AVAILABLE   OFF CACHE BOOL "" FORCE)
@@ -80,6 +97,10 @@ add_library(SyncHarbor_core STATIC
     src/http-server.cpp
     src/sync-manager.cpp
     src/commands.cpp
+    src/active-count.cpp
+    src/event-registry.cpp
+    src/request-handle.cpp
+    src/utils.cpp
 )
 
 target_include_directories(SyncHarbor_core
@@ -135,10 +156,10 @@ target_link_options(SyncHarbor_core PUBLIC
   $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:MSVC>>:/fsanitize=undefined>
 )
 
-add_executable(SyncHarbor src/main.cpp)
-target_link_libraries(SyncHarbor PRIVATE SyncHarbor_core)
+add_executable(syncharbor src/main.cpp)
+target_link_libraries(syncharbor PRIVATE SyncHarbor_core)
 
-target_link_options(SyncHarbor PUBLIC
+target_link_options(syncharbor PUBLIC
   $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:GNU>>:-fsanitize=undefined>
   $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:Clang>>:-fsanitize=undefined>
   $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:MSVC>>:/fsanitize=undefined>
@@ -161,13 +182,10 @@ add_subdirectory(tests)
 #    DESTINATION include
 #)
 
-#install(
-#    TARGETS SyncHarbor_core SyncHarbor
-#    EXPORT  SyncHarborTargets
-#    RUNTIME  DESTINATION bin
-#    ARCHIVE  DESTINATION lib
-#    INCLUDES DESTINATION include
-#)
+install(
+    TARGETS SyncHarbor_core syncharbor
+    RUNTIME  DESTINATION bin
+)
 
 #install(
 #    EXPORT   SyncHarborTargets

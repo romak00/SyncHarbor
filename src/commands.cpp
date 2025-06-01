@@ -57,7 +57,7 @@ LocalUploadCommand::LocalUploadCommand(const int cloud_id) {
 
 void LocalUploadCommand::completionCallback(const std::unique_ptr<Database>& db, const std::shared_ptr<BaseStorage>& cloud) {
 
-    LOG_INFO("LOCAL UPLOAD %s started", this->getTarget());
+    LOG_INFO("LOCAL UPLOAD" "on %s started", this->getTarget());
     cloud->proccesUpload(_dto, "");
     for (auto& next_command : _next_commands) {
         int cloud_id = next_command->getId();
@@ -65,7 +65,7 @@ void LocalUploadCommand::completionCallback(const std::unique_ptr<Database>& db,
         _dto->cloud_id = cloud_id;
         next_command->setDTO(std::make_unique<FileRecordDTO>(*_dto));
     }
-    LOG_INFO("LOCAL UPLOAD %s completed", this->getTarget());
+    LOG_INFO("LOCAL UPLOAD" "on %s completed", this->getTarget());
 
     if (auto ch = owner()) {
         ch->onCommandFinished();
@@ -92,7 +92,6 @@ void LocalUpdateCommand::completionCallback(const std::unique_ptr<Database>& db,
     LOG_INFO("LOCAL UPDATE", this->getTarget(), "started");
 
     cloud->proccesUpdate(_dto, "");
-    db->update_file(*_dto);
 
     for (auto& next_command : _next_commands) {
         int cloud_id = next_command->getId();
@@ -126,7 +125,7 @@ LocalMoveCommand::LocalMoveCommand(const int cloud_id) {
 }
 
 void LocalMoveCommand::completionCallback(const std::unique_ptr<Database>& db, const std::shared_ptr<BaseStorage>& cloud) {
-    LOG_INFO("LOCAL MOVE %s started", this->getTarget());
+    LOG_INFO("LOCAL MOVE" "%s started", this->getTarget());
 
     cloud->proccesMove(_dto, "");
 
@@ -140,7 +139,7 @@ void LocalMoveCommand::completionCallback(const std::unique_ptr<Database>& db, c
         _dto->cloud_id = cloud_id;
         next_command->setDTO(std::make_unique<FileMovedDTO>(*_dto));
     }
-    LOG_INFO("LOCAL MOVE %s completed", this->getTarget());
+    LOG_INFO("LOCAL MOVE" "%s completed", this->getTarget());
 
     if (auto ch = owner()) {
         ch->onCommandFinished();
@@ -166,7 +165,7 @@ LocalDeleteCommand::LocalDeleteCommand(const int cloud_id) {
 void LocalDeleteCommand::completionCallback(const std::unique_ptr<Database>& db, const std::shared_ptr<BaseStorage>& cloud) {
     bool need_local_delete = (_dto->cloud_id != 0);
 
-    LOG_INFO("LOCAL MOVE", this->getTarget(), "started");
+    LOG_INFO("LOCAL DELETE", "%s started", this->getTarget());
 
     cloud->proccesDelete(_dto, "");
 
@@ -183,7 +182,7 @@ void LocalDeleteCommand::completionCallback(const std::unique_ptr<Database>& db,
         std::filesystem::remove(path);
     }
     db->delete_file_and_links(_dto->global_id);
-    LOG_INFO("LOCAL DELETE", this->getTarget(), "completed");
+    LOG_INFO("LOCAL DELETE", "%s completed", this->getTarget());
 
     if (auto ch = owner()) {
         ch->onCommandFinished();
