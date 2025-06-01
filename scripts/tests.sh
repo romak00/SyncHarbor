@@ -10,15 +10,63 @@ else
   PARALLEL=$(sysctl -n hw.ncpu)
 fi
 
-echo "Running DatabaseTests in parallel…"
+echo "Running DatabaseUnitTests in parallel..."
 ctest -C "$cfg" \
   --output-on-failure \
   --parallel "$PARALLEL" \
-  -R "^DatabaseTest\."
+  -R "^DatabaseUnitTest\."
 
-echo "Running LocalStorageTests sequentially…"
+echo "Running LocalStorageUnitTests sequentially..."
 ctest -C "$cfg" \
   --output-on-failure \
-  -R "^LocalStorageTest\."
+  -R "^LocalStorageUnitTest\."
+
+echo "Running HttpServerUnitTests sequentially..."
+ctest -C "$cfg" \
+  --output-on-failure \
+  -R "^HttpServerUnitTest\."
+
+echo "Running CallbackDispatcherUnitTests in parallel..."
+ctest -C "$cfg" \
+  --output-on-failure \
+  --parallel "$PARALLEL" \
+  -R "^CallbackDispatcherUnitTest\."
+
+echo "Running RequestHandleUnitTests in parallel..."
+ctest -C "$cfg" \
+  --output-on-failure \
+  --parallel "$PARALLEL" \
+  -R "^RequestHandleUnitTest\."
+
+echo "Running ActiveCountUnitTests sequentially..."
+ctest -C "$cfg" \
+  --output-on-failure \
+  -R "^ActiveCountUnitTest\."
+
+echo "Running EventRegistryUnitTests sequentially..."
+ctest -C "$cfg" \
+  --output-on-failure \
+  -R "^EventRegistryUnitTest\."
+
+echo "Running UtilsUnitTests in parallel..."
+ctest -C "$cfg" \
+  --output-on-failure \
+  --parallel "$PARALLEL" \
+  -R "^UtilsUnitTest\."
+
+echo "Running SyncManagerUnitTests sequentially..."
+ctest -C "$cfg" \
+  --output-on-failure \
+  -R "^SyncManagerUnitTest\."
+
+echo "Running HttpClientIntegrationTests sequentially..."
+ctest -C "$cfg" \
+  --output-on-failure \
+  -R "^HttpClientIntegrationTest\."
+
+echo "Running LocalStorageIntegrationTests sequentially..."
+ctest -C "$cfg" \
+  --output-on-failure \
+  -R "^LocalStorageIntegrationTest\."
 
 popd
