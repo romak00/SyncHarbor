@@ -23,6 +23,7 @@ cd syncharbor
 ./scripts/build.sh Release
 
 # 4. optional – install as a binary to /usr/local
+cd build
 sudo make install
 ```
 
