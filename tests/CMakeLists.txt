@@ -30,6 +30,7 @@ target_link_libraries(DatabaseUnitTests
         Threads::Threads
         SQLite::SQLite3
 )
+target_compile_definitions(DatabaseUnitTests PRIVATE ENABLE_GTEST_FRIENDS)
 include(GoogleTest)
 gtest_discover_tests(DatabaseUnitTests
     PROPERTIES LABELS "unit-db"
@@ -55,6 +56,7 @@ target_link_libraries(LocalStorageUnitTests
         Threads::Threads
         SQLite::SQLite3
 )
+target_compile_definitions(LocalStorageUnitTests PRIVATE ENABLE_GTEST_FRIENDS)
 include(GoogleTest)
 gtest_discover_tests(LocalStorageUnitTests
     PROPERTIES LABELS "unit-local_storage"
@@ -187,6 +189,7 @@ target_link_libraries(SyncManagerUnitTests
         GTest::gtest_main
         Threads::Threads
 )
+target_compile_definitions(SyncManagerUnitTests PRIVATE ENABLE_GTEST_FRIENDS)
 include(GoogleTest)
 gtest_discover_tests(SyncManagerUnitTests
     PROPERTIES LABELS "unit-sync-manager"
@@ -225,6 +228,7 @@ target_link_libraries(LocalStorageIntegrationTests PRIVATE
     GTest::gtest_main
     Threads::Threads
 )
+target_compile_definitions(LocalStorageIntegrationTests PRIVATE ENABLE_GTEST_FRIENDS)
 gtest_discover_tests(LocalStorageIntegrationTests)
 
 include(GoogleTest)

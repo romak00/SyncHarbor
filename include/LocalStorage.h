@@ -7,7 +7,6 @@
 
 #define XXH_INLINE_ALL
 #include <xxhash.h>
-#include <gtest/gtest_prod.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -70,6 +69,8 @@ public:
     void setOnChange(std::function<void()> cb) override;
 private:
 
+#ifdef ENABLE_GTEST_FRIENDS
+#include <gtest/gtest_prod.h>
     FRIEND_TEST(LocalStorageUnitTest, GetFileIdNonexistent);
     FRIEND_TEST(LocalStorageUnitTest, GetHomeDir);
     FRIEND_TEST(LocalStorageUnitTest, FromWatcherTime);
@@ -99,7 +100,7 @@ private:
     FRIEND_TEST(LocalStorageIntegrationTest, EditorAtomicSave);
     FRIEND_TEST(LocalStorageIntegrationTest, DetectDeleteFile);
     FRIEND_TEST(LocalStorageIntegrationTest, GetFileIdOnCreate);
-
+#endif
 
 
     uint64_t getFileId(const std::filesystem::path& p) const;

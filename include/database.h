@@ -2,7 +2,6 @@
 
 #include <sqlite3.h>
 #include <vector>
-#include <gtest/gtest_prod.h>
 #include "utils.h"
 #include <nlohmann/json.hpp>
 
@@ -60,6 +59,9 @@ private:
     void create_tables();
     void execute(const std::string& sql);
 
+#ifdef ENABLE_GTEST_FRIENDS
+#include <gtest/gtest_prod.h>
+
     FRIEND_TEST(DatabaseUnitTest, GetCloudsEmptyAfterDelete);
     FRIEND_TEST(DatabaseUnitTest, ExecuteBadSql);
     FRIEND_TEST(DatabaseUnitTest, CheckRcThrows);
@@ -78,6 +80,8 @@ private:
     FRIEND_TEST(DatabaseUnitTest, UpdateCloudDataPrepareError);
     FRIEND_TEST(DatabaseUnitTest, UpdateFileLinkAndFilePrepareError);
     FRIEND_TEST(DatabaseUnitTest, UpdateFileMovedDTOPrepareError);
+#endif
+
 
 };
 

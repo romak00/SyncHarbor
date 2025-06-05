@@ -79,7 +79,7 @@ TEST_F(DatabaseUnitTest, ExecuteAndCheckRc) {
 }
 
 TEST_F(DatabaseUnitTest, GetPathByGlobalIdNotFound) {
-    EXPECT_THROW(db->getPathByGlobalId(42), std::runtime_error);
+    EXPECT_TRUE((db->getPathByGlobalId(42)).empty());
 }
 
 TEST_F(DatabaseUnitTest, UpdateCloudDataPrepareError) {

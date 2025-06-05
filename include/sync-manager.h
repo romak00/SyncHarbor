@@ -101,6 +101,8 @@ private:
     int _num_clouds;
 
     Mode _mode;
-
+#ifdef ENABLE_GTEST_FRIENDS
+#include <gtest/gtest_prod.h>
     FRIEND_TEST(SyncManagerUnitTest, DirectoryIsWritableTrue);
+#endif
 };
