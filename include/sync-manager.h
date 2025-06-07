@@ -3,6 +3,7 @@
 #include "LocalStorage.h"
 #include "http-server.h"
 #include "cloud-factory.h"
+#include <atomic>
 
 class SyncManager {
 public:
