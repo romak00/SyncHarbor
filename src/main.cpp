@@ -10,12 +10,14 @@
 #include <cctype>
 #include <csignal>
 
-#if defined(_WIN32)
+#ifdef _WIN32
 #include <windows.h>
+    using process_id_t = DWORD;
 #else
 #include <sys/types.h>
 #include <signal.h>
 #include <unistd.h>
+    using process_id_t = pid_t;
 #endif
 
 static std::filesystem::path getBaseDataDir() {
@@ -212,7 +214,7 @@ BOOL WINAPI ConsoleHandler(DWORD signal) {
 }
 #endif
 
-static bool terminateByPid(pid_t pid) {
+static bool terminateByPid(process_id_t pid) {
 #if defined(_WIN32)
     HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid));
     if (!h) {
@@ -276,7 +278,7 @@ int main(int argc, char* argv[]) {
             std::cerr << "Cannot open pid-file: " << pid_file << "\n";
             return 1;
         }
-        pid_t pid = 0;
+        process_id_t pid = 0;
         in >> pid;
         in.close();
 
@@ -455,7 +457,7 @@ int main(int argc, char* argv[]) {
                 std::cerr << "Cannot write pid file: " << pid_file << "\n";
             }
             else {
-                pid_t mypid;
+                process_id_t mypid;
 #ifdef _WIN32
                 mypid = GetCurrentProcessId();
 #else
@@ -539,7 +541,7 @@ int main(int argc, char* argv[]) {
                 std::cerr << "Cannot write pid file: " << pid_file << "\n";
             }
             else {
-                pid_t mypid;
+                process_id_t mypid;
 #ifdef _WIN32
                 mypid = GetCurrentProcessId();
 #else
