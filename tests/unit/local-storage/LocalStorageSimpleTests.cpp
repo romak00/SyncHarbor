@@ -39,7 +39,11 @@ TEST_F(LocalStorageUnitTest, FromWatcherTime) {
     long long ns = 2'000'000'000LL;
     auto got = ls->fromWatcherTime(ns);
     using namespace std::chrono;
-    auto exp = system_clock::to_time_t(system_clock::time_point{ nanoseconds(ns) });
+    auto exp = system_clock::to_time_t(
+        system_clock::time_point{
+            duration_cast<system_clock::duration>(nanoseconds(ns))
+        }
+    );
     EXPECT_EQ(got, exp);
 }
 
