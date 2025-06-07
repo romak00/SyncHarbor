@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <unordered_map>
 #include <chrono>
+#include <variant>
 
 std::filesystem::path normalizePath(const std::filesystem::path& p);
 
@@ -50,14 +51,14 @@ public:
         const uint64_t hash,
         const uint64_t fid
     ) :
-        type(t),
         rel_path(rp),
-        size(s),
-        cloud_file_modified_time(cfmt),
         cloud_hash_check_sum(hash),
+        size(s),
         file_id(fid),
+        cloud_file_modified_time(cfmt),
+        global_id(0),
         cloud_id(0),
-        global_id(0)
+        type(t)
     {
     }
 
@@ -71,13 +72,13 @@ public:
         const std::time_t cfmt
     ) :
         cloud_parent_id(parent),
-        cloud_id(c_id),
         cloud_file_id(cf_id),
-        size(s),
-        cloud_file_modified_time(cfmt),
         cloud_hash_check_sum(hash),
+        size(s),
+        file_id(0),
+        cloud_file_modified_time(cfmt),
         global_id(g_id),
-        file_id(0)
+        cloud_id(c_id)
     {
     }
 
@@ -90,14 +91,14 @@ public:
         const std::time_t cfmt,
         const uint64_t fid
     ) :
-        type(t),
         rel_path(rp),
-        size(s),
-        cloud_file_modified_time(cfmt),
         cloud_hash_check_sum(hash),
+        size(s),
         file_id(fid),
+        cloud_file_modified_time(cfmt),
         global_id(g_id),
-        cloud_id(0)
+        cloud_id(0),
+        type(t)
     {
     }
 
@@ -110,15 +111,15 @@ public:
         const std::string& hash,
         const int cid
     ) :
-        type(t),
         rel_path(rp),
         cloud_file_id(cf_id),
-        size(s),
-        cloud_file_modified_time(cfmt),
         cloud_hash_check_sum(hash),
-        cloud_id(cid),
+        size(s),
         file_id(0),
-        global_id(0)
+        cloud_file_modified_time(cfmt),
+        global_id(0),
+        cloud_id(cid),
+        type(t)
     {
     }
 
@@ -132,16 +133,16 @@ public:
         const std::string& hash,
         const int cid
     ) :
-        type(t),
-        cloud_parent_id(parent),
         rel_path(rp),
+        cloud_parent_id(parent),
         cloud_file_id(cf_id),
-        size(s),
-        cloud_file_modified_time(cfmt),
         cloud_hash_check_sum(hash),
-        cloud_id(cid),
+        size(s),
         file_id(0),
-        global_id(0)
+        cloud_file_modified_time(cfmt),
+        global_id(0),
+        cloud_id(cid),
+        type(t)
     {
     }
 
@@ -187,10 +188,10 @@ public:
         std::shared_ptr<FileEvent> ass
     ) :
         path(p),
-        when(tm),
-        type(tp),
         associated(ass),
-        file_id(0)
+        file_id(0),
+        when(tm),
+        type(tp)
     {
     }
 
@@ -200,10 +201,10 @@ public:
         const ChangeType tp
     ) :
         path(p),
-        when(tm),
-        type(tp),
         associated(nullptr),
-        file_id(0)
+        file_id(0),
+        when(tm),
+        type(tp)
     {
     }
 
@@ -233,14 +234,14 @@ public:
         const uint64_t s,
         const uint64_t fid
     ) :
-        global_id(gid),
-        cloud_hash_check_sum(chcs),
         rel_path(rp),
-        cloud_file_modified_time(cfmt),
-        type(t),
+        cloud_hash_check_sum(chcs),
         size(s),
+        cloud_file_modified_time(cfmt),
         file_id(fid),
-        cloud_id(0)
+        global_id(gid),
+        cloud_id(0),
+        type(t)
     {
     }
 
@@ -255,16 +256,16 @@ public:
         const std::string& cpid,
         const uint64_t s
     ) :
-        global_id(gid),
-        cloud_id(cid),
+        rel_path(rp),
         cloud_file_id(cfid),
         cloud_hash_check_sum(chcs),
         cloud_parent_id(cpid),
-        rel_path(rp),
-        cloud_file_modified_time(cfmt),
-        type(t),
         size(s),
-        file_id(0)
+        cloud_file_modified_time(cfmt),
+        file_id(0),
+        global_id(gid),
+        cloud_id(cid),
+        type(t)
     {
     }
 
@@ -298,12 +299,12 @@ public:
         const std::filesystem::path& orp,
         const std::filesystem::path& nrp
     ) :
-        global_id(gid),
         old_rel_path(orp),
         new_rel_path(nrp),
         cloud_file_modified_time(cfmt),
-        type(t),
-        cloud_id(0)
+        global_id(gid),
+        cloud_id(0),
+        type(t)
     {
     }
 
@@ -318,14 +319,14 @@ public:
         const std::string& old_cpid,
         const std::string& new_cpid
     ) :
-        global_id(gid),
-        cloud_id(cid),
+        old_rel_path(orp),
+        new_rel_path(nrp),
         cloud_file_id(cfid),
         old_cloud_parent_id(old_cpid),
         new_cloud_parent_id(new_cpid),
-        old_rel_path(orp),
-        new_rel_path(nrp),
         cloud_file_modified_time(cfmt),
+        global_id(gid),
+        cloud_id(cid),
         type(t)
     {
     }
@@ -358,8 +359,8 @@ public:
         const std::time_t t
     ) :
         rel_path(rp),
-        global_id(gid),
         when(t),
+        global_id(gid),
         cloud_id(0)
     {
     }
@@ -372,10 +373,10 @@ public:
         const std::time_t t
     ) :
         rel_path(rp),
-        global_id(gid),
-        cloud_id(cid),
         cloud_file_id(cfid),
-        when(t)
+        when(t),
+        global_id(gid),
+        cloud_id(cid)
     {
     }
 

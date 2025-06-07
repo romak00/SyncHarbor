@@ -38,8 +38,8 @@ RequestHandle::RequestHandle(RequestHandle&& other) noexcept
     _mime(other._mime),
     _headers(other._headers),
     _timer(other._timer),
-    _retry_count(other._retry_count),
-    _iofd(std::move(other._iofd))
+    _iofd(std::move(other._iofd)),
+    _retry_count(other._retry_count)
 {
     other._curl = nullptr;
     other._mime = nullptr;

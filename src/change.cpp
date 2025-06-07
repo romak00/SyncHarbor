@@ -6,12 +6,12 @@ Change::Change(
     std::time_t ct,
     const int cloud_id
 ) :
-    _type(t),
     _target_path(target_path),
+    _pending_cmds(0),
     _change_time(ct),
     _cloud_id(cloud_id),
-    _pending_cmds(0),
-    _status(Status::Pending)
+    _status(Status::Pending),
+    _type(t)
 {
 }
 
@@ -23,13 +23,13 @@ Change::Change(
     std::vector<std::unique_ptr<ICommand>> fcmds,
     const int cmds
 ) :
-    _type(t),
-    _target_path(target_path),
+    _cmd_chain(std::move(fcmds)),
+    _target_path(std::move(target_path)),
+    _pending_cmds(cmds),
     _change_time(ct),
     _cloud_id(cloud_id),
-    _cmd_chain(std::move(fcmds)),
-    _pending_cmds(cmds),
-    _status(Status::Pending)
+    _status(Status::Pending),
+    _type(t)
 {
 }
 
@@ -41,31 +41,31 @@ Change::Change(
     std::unique_ptr<ICommand> fcmds,
     const int cmds
 ) :
-    _type(t),
     _target_path(target_path),
+    _pending_cmds(cmds),
     _change_time(ct),
     _cloud_id(cloud_id),
-    _pending_cmds(cmds),
-    _status(Status::Pending)
+    _status(Status::Pending),
+    _type(t)
 {
     _cmd_chain.clear();
     _cmd_chain.push_back(std::move(fcmds));
 }
 
 Change::Change(Change&& other) noexcept
-    : _type(other._type)
-    , _change_time(other._change_time)
-    , _status(other._status)
-    , _cloud_id(other._cloud_id)
+    : _dependents(std::move(other._dependents))
     , _cmd_chain(std::move(other._cmd_chain))
-    , _dependents(std::move(other._dependents))
-    , _on_complete(std::move(other._on_complete))
     , _target_path(std::move(other._target_path))
+    , _on_complete(std::move(other._on_complete))
     , _pending_cmds(other._pending_cmds.load(std::memory_order_relaxed))
+    , _change_time(other._change_time)
+    , _cloud_id(other._cloud_id)
+    , _status(other._status)
+    , _type(other._type)
 {
 }
 
-Change& Change::operator=(Change&& other) noexcept {
+auto Change::operator=(Change&& other) noexcept -> Change& {
     if (this != &other) {
         _type = other._type;
         _change_time = other._change_time;
@@ -108,19 +108,19 @@ void Change::addDependent(std::shared_ptr<Change> change) {
     _dependents.emplace_back(std::move(change));
 }
 
-std::time_t Change::getTime() const {
+auto Change::getTime() const -> std::time_t {
     return _change_time;
 }
 
-std::filesystem::path Change::getTargetPath() const {
+auto Change::getTargetPath() const -> std::filesystem::path {
     return _target_path;
 }
 
-ChangeType Change::getType() const {
+auto Change::getType() const -> ChangeType {
     return _type;
 }
 
-int Change::getCloudId() const {
+auto Change::getCloudId() const -> int {
     return _cloud_id;
 }
 
@@ -139,7 +139,7 @@ void Change::dispatch() {
     }
 }
 
-EntryType Change::getTargetType() const {
+auto Change::getTargetType() const -> EntryType {
     return _cmd_chain.empty() ? EntryType::Null : _cmd_chain[0]->getTargetType();
 }
 

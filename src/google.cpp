@@ -13,13 +13,13 @@ GoogleDrive::GoogleDrive(
     const int cloud_id
 )
     :
+    _local_home_path(local_home_dir),
+    _home_path(home_dir),
     _client_id(client_id),
     _client_secret(client_secret),
     _refresh_token(refresh_token),
-    _local_home_path(local_home_dir),
     _db(db_conn),
-    _id(cloud_id),
-    _home_path(home_dir)
+    _id(cloud_id)
 {
     this->refreshAccessToken();
     this->ensureRootExists();
@@ -34,12 +34,12 @@ GoogleDrive::GoogleDrive(
     const int cloud_id
 )
     :
+    _local_home_path(local_home_dir),
+    _home_path(home_dir),
     _client_id(client_id),
     _client_secret(client_secret),
-    _local_home_path(local_home_dir),
     _db(db_conn),
-    _id(cloud_id),
-    _home_path(home_dir)
+    _id(cloud_id)
 {
 }
 
@@ -53,14 +53,14 @@ GoogleDrive::GoogleDrive(
     const int cloud_id,
     const std::string& start_page_token
 ) :
+    _local_home_path(local_home_dir),
+    _home_path(home_dir),
     _client_id(client_id),
     _client_secret(client_secret),
     _refresh_token(refresh_token),
-    _local_home_path(local_home_dir),
     _page_token(start_page_token),
     _db(db_conn),
-    _id(cloud_id),
-    _home_path(home_dir)
+    _id(cloud_id)
 {
     this->refreshAccessToken();
     this->ensureRootExists();
@@ -77,14 +77,14 @@ GoogleDrive::GoogleDrive(
     const std::string& start_page_token,
     bool test
 ) :
+    _local_home_path(local_home_dir),
+    _home_path(home_dir),
     _client_id(client_id),
     _client_secret(client_secret),
     _refresh_token(refresh_token),
-    _local_home_path(local_home_dir),
     _page_token(start_page_token),
     _db(db_conn),
-    _id(cloud_id),
-    _home_path(home_dir)
+    _id(cloud_id)
 {
 }
 

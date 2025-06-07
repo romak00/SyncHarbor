@@ -2,7 +2,7 @@
 #include "logger.h"
 
 LocalHttpServer::LocalHttpServer(int port)
-    : _port(port), _svr(), _running(false)
+    : _svr(), _running(false), _port(port)
 {
     std::string path = "/oauth2callback";
     _svr.Get(path.c_str(),

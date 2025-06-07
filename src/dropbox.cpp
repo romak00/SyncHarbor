@@ -12,11 +12,11 @@ Dropbox::Dropbox(
     const int cloud_id
 )
     :
+    _home_path(home_path),
+    _local_home_path(local_home_path),
     _client_id(client_id),
     _client_secret(client_secret),
     _refresh_token(refresh_token),
-    _home_path(home_path),
-    _local_home_path(local_home_path),
     _db(db_conn),
     _id(cloud_id)
 {
@@ -33,10 +33,10 @@ Dropbox::Dropbox(
     const int cloud_id
 )
     :
-    _client_id(client_id),
-    _client_secret(client_secret),
     _home_path(home_path),
     _local_home_path(local_home_path),
+    _client_id(client_id),
+    _client_secret(client_secret),
     _db(db_conn),
     _id(cloud_id)
 {
@@ -53,12 +53,12 @@ Dropbox::Dropbox(
     const std::string& start_page_token
 )
     :
+    _home_path(home_path),
+    _local_home_path(local_home_path),
     _client_id(client_id),
     _client_secret(client_secret),
     _refresh_token(refresh_token),
     _page_token(start_page_token),
-    _home_path(home_path),
-    _local_home_path(local_home_path),
     _db(db_conn),
     _id(cloud_id)
 {

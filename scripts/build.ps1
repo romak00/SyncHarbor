@@ -29,6 +29,7 @@ $cmakeArgs = @(
     "-G", "Visual Studio 17 2022"
     "-A", "x64"
     "-DCMAKE_BUILD_TYPE=$Config"
+    "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
     "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
 ) + $AdditionalCMakeArgs
 
