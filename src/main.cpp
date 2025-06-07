@@ -292,7 +292,13 @@ int main(int argc, char* argv[]) {
 #if defined(_WIN32)
         HANDLE hcheck = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
         if (hcheck) {
-            alive = (GetExitCodeProcess(hcheck, &alive), alive == STILL_ACTIVE);
+            DWORD exit_code = 0;
+            if (GetExitCodeProcess(hcheck, &exit_code)) {
+                alive = (exit_code == STILL_ACTIVE);    
+            }
+            else {
+                alive = false;
+            }
             CloseHandle(hcheck);
         }
 #else
@@ -316,13 +322,20 @@ int main(int argc, char* argv[]) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
 #if defined(_WIN32)
             HANDLE hup = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
-            if (!hup) break;
+            if (!hup) {
+                break;
+            }
             DWORD code = 0;
             GetExitCodeProcess(hup, &code);
             CloseHandle(hup);
-            if (code != STILL_ACTIVE) break;
+            if (code != STILL_ACTIVE)
+            {
+                break;
+            }
 #else
-            if (kill(pid, 0) != 0) break;
+            if (kill(pid, 0) != 0) {
+                break;
+            }
 #endif
         }
         bool still_alive = false;
@@ -386,7 +399,7 @@ int main(int argc, char* argv[]) {
 #if CUSTOM_LOGGING_ENABLED
         try {
             std::filesystem::create_directories(data_dir / "logs");
-            Logger::get().addLogFile("general", data_dir / "logs" / "syncharbor-initial.log");
+            Logger::get().addLogFile("general", (data_dir / "logs" / "syncharbor-initial.log").string());
         }
         catch (const std::exception& e) {
             std::cerr << "Cannot create data folder: " << (data_dir / "logs") << ": " << e.what() << "\n";
@@ -432,7 +445,7 @@ int main(int argc, char* argv[]) {
 #if CUSTOM_LOGGING_ENABLED
         try {
             std::filesystem::create_directories(data_dir / "logs");
-            Logger::get().addLogFile("general", data_dir / "logs" / "syncharbor-daemon.log");
+            Logger::get().addLogFile("general", (data_dir / "logs" / "syncharbor-daemon.log").string());
             
         }
         catch (const std::exception& e) {
@@ -492,7 +505,7 @@ int main(int argc, char* argv[]) {
 
         try {
             std::filesystem::create_directories(data_dir / "logs");
-            Logger::get().addLogFile("general", data_dir / "logs" / "syncharbor-daemon.log");
+            Logger::get().addLogFile("general", (data_dir / "logs" / "syncharbor-daemon.log").string());
 
         }
         catch (const std::exception& e) {
@@ -517,7 +530,7 @@ int main(int argc, char* argv[]) {
 
         try {
             std::filesystem::create_directories(data_dir / "logs");
-            Logger::get().addLogFile("general", data_dir / "logs" / "syncharbor-daemon.log");
+            Logger::get().addLogFile("general", (data_dir / "logs" / "syncharbor-daemon.log").string());
 
         }
         catch (const std::exception& e) {

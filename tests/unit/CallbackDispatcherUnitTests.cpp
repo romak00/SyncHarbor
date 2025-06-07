@@ -22,7 +22,7 @@ struct FakeStorage : BaseStorage {
     std::vector<std::unique_ptr<FileRecordDTO>> createPath(const std::filesystem::path& path, const std::filesystem::path& missing) override { return {}; };
 
     std::string buildAuthURL(int local_port) const override { return ""; }
-    std::string getRefreshToken(const std::string& code, const int local_port) override {}
+    std::string getRefreshToken(const std::string& code, const int local_port) override { return ""; }
     void refreshAccessToken() override {}
     void proccessAuth(const std::string& responce) override {}
     std::string getDeltaToken() override { return ""; }
