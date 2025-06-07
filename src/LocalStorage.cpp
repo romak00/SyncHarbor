@@ -164,13 +164,28 @@ bool LocalStorage::ignoreTmp(const std::filesystem::path& path) {
 
 void LocalStorage::startWatching() {
     if (_watching) return;
-    LOG_INFO("LocalStorage", "Starting watcher on %s", _local_home_dir.string());
+    std::cerr << "[LocalStorage] startWatching() called, _local_home_dir=" << _local_home_dir << "\n";
     _watching = true;
 
-    _watcher = std::make_unique<wtr::watch>(_local_home_dir.string(),
-        [this](wtr::event ev) { this->onFsEvent(ev); }
-    );
+    try {
+        _watcher = std::make_unique<wtr::watch>(_local_home_dir.string(),
+            [this](wtr::event ev) {
+                std::cerr << "[LocalStorage] onFsEvent callback invoked for " << ev.path_name << "\n";
+                this->onFsEvent(ev);
+            }
+        );
+        std::cerr << "[LocalStorage] wtr::watch constructor returned\n";
+    }
+    catch (const std::exception& ex) {
+        std::cerr << "[LocalStorage] EXCEPTION in wtr::watch ctor: " << ex.what() << "\n";
+        throw;
+    }
+    catch (...) {
+        std::cerr << "[LocalStorage] UNKNOWN EXCEPTION in wtr::watch ctor\n";
+        throw;
+    }
 }
+
 
 void LocalStorage::stopWatching() {
     if (!_watching) return;

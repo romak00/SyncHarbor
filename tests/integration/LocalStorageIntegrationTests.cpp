@@ -19,29 +19,44 @@ static void safeSleep() {
 
 class LocalStorageIntegrationTest : public ::testing::Test {
 protected:
-    void SetUp() override {
+    void LocalStorageIntegrationTest::SetUp() override {
+        std::cerr << "[SetUp] entering SetUp()\n";
+
         auto a_tmp_dir = std::filesystem::temp_directory_path() / "-test-local_storage-";
+        std::cerr << "[SetUp] temp dir = " << a_tmp_dir << "\n";
 
         std::error_code ec;
         std::filesystem::remove_all(a_tmp_dir, ec);
         std::filesystem::create_directory(a_tmp_dir);
-
         tmp_dir = std::filesystem::canonical(a_tmp_dir);
+        std::cerr << "[SetUp] canonical tmp_dir = " << tmp_dir << "\n";
 
         db = std::make_shared<Database>(std::string{ ":memory:" });
+        std::cerr << "[SetUp] Database created\n";
 
         CallbackDispatcher::get().finish();
         CallbackDispatcher::get().setDB(db);
         CallbackDispatcher::get().setClouds({});
+        std::cerr << "[SetUp] CallbackDispatcher configured\n";
 
-        storage = std::make_unique<LocalStorage>(tmp_dir, /*cloudId=*/0, db);
-        storage->setOnChange([] {});
+        std::cerr << "[SetUp] About to create LocalStorage\n";
+        storage = std::make_unique<LocalStorage>(tmp_dir, 0, db);
+        std::cerr << "[SetUp] LocalStorage ctor returned\n";
+
+        storage->setOnChange([] { std::cerr << "[SetUp] onChange callback invoked\n"; });
+        std::cerr << "[SetUp] setOnChange called\n";
+
+        std::cerr << "[SetUp] About to call startWatching()\n";
         storage->startWatching();
+        std::cerr << "[SetUp] startWatching() returned\n";
 
         Logger::get().setGlobalLogLevel(LogLevel::DBG);
+        std::cerr << "[SetUp] Logger level set to DBG\n";
 
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        std::cerr << "[SetUp] sleep_for(500ms) done, leaving SetUp()\n";
     }
+
 
     void TearDown() override {
         storage->stopWatching();
