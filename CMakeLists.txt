@@ -135,7 +135,7 @@ target_compile_options(SyncHarbor_core PRIVATE
     # Debug
     $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:GNU>>:-Wall -Wextra -Wpedantic -fsanitize=undefined>
     $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:Clang>>:-Weverything -fsanitize=undefined>
-    $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:MSVC>>:/W4 /fsanitize=undefined>
+    $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:MSVC>>:/W4>
 )
 
 target_compile_options(SyncHarbor_core PRIVATE
@@ -153,7 +153,6 @@ target_compile_options(SyncHarbor_core PRIVATE
 target_link_options(SyncHarbor_core PUBLIC
   $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:GNU>>:-fsanitize=undefined>
   $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:Clang>>:-fsanitize=undefined>
-  $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:MSVC>>:/fsanitize=undefined>
 )
 
 add_executable(syncharbor src/main.cpp)
@@ -162,7 +161,6 @@ target_link_libraries(syncharbor PRIVATE SyncHarbor_core)
 target_link_options(syncharbor PUBLIC
   $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:GNU>>:-fsanitize=undefined>
   $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:Clang>>:-fsanitize=undefined>
-  $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:MSVC>>:/fsanitize=undefined>
 )
 
 enable_testing()
