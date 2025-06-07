@@ -79,8 +79,8 @@ protected:
 
 TEST_F(LocalStorageIntegrationTest, DetectCreateFile) {
     Logger::get().addLogFile("DetectCreateFile", "SyncHarbor.DetectCreateFile.log");
-    auto file = tmp_dir / "a.txt";
-    std::ofstream(file) << "hello";
+    auto file1 = tmp_dir / "a.txt";
+    std::ofstream(file1) << "hello";
     auto changes = waitChanges();
 
     ASSERT_EQ(changes.size(), 1);
