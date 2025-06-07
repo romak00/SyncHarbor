@@ -19,7 +19,7 @@ static void safeSleep() {
 
 class LocalStorageIntegrationTest : public ::testing::Test {
 protected:
-    void LocalStorageIntegrationTest::SetUp() override {
+    void SetUp() override {
         std::cerr << "[SetUp] entering SetUp()\n";
 
         auto a_tmp_dir = std::filesystem::temp_directory_path() / "-test-local_storage-";
