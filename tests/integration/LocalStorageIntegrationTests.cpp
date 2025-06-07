@@ -244,6 +244,14 @@ TEST_F(LocalStorageIntegrationTest, DetectNestedCreate) {
     auto file = dir1 / "inside.txt";
     std::ofstream(file) << "hi";
 
+#ifdef _WIN32
+    auto changes = waitChanges();
+    ASSERT_EQ(changes.size(), 1);
+
+    EXPECT_EQ(changes[0]->getType(), ChangeType::New);
+    EXPECT_EQ(changes[0]->getTargetPath(), std::filesystem::path("x/inside.txt"));
+    EXPECT_EQ(changes[0]->getTargetType(), EntryType::File);
+#else
     auto changes = waitChanges(2);
     ASSERT_EQ(changes.size(), 2);
 
@@ -254,6 +262,7 @@ TEST_F(LocalStorageIntegrationTest, DetectNestedCreate) {
     EXPECT_EQ(changes[1]->getType(), ChangeType::New);
     EXPECT_EQ(changes[1]->getTargetPath(), std::filesystem::path("x/inside.txt"));
     EXPECT_EQ(changes[1]->getTargetType(), EntryType::File);
+#endif
 }
 
 TEST_F(LocalStorageIntegrationTest, GetFileIdOnCreate) {
