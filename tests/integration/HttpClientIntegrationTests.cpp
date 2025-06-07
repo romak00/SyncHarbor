@@ -50,7 +50,7 @@ struct MockServer {
             res.set_content("bad request", "text/plain");
             });
 
-        thr = std::thread([&, port] { srv.listen("localhost", port); });
+        thr = std::thread([&, port] { srv.listen("127.0.0.1", port); });
     }
     ~MockServer() { srv.stop(); thr.join(); }
 };
@@ -85,6 +85,7 @@ protected:
     void SetUp() override {
         CallbackDispatcher::get().start();
         HttpClient::get().start();
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     void TearDown() override {
         HttpClient::get().waitUntilIdle();
