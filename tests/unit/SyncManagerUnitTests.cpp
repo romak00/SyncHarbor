@@ -86,7 +86,7 @@ TEST_F(SyncManagerUnitTest, LoadConfigSucceedsOnEmptyClouds) {
     auto cfg = dir / "config.json";
     {
         std::ofstream out(cfg);
-        out << "{ \"clouds\": [], \"local\": \"" << dir.string() << "\" }";
+        out << "{ \"clouds\": [], \"local\": \"" << dir.generic_string() << "\" }";
     }
     EXPECT_NO_THROW(
         SyncManager(

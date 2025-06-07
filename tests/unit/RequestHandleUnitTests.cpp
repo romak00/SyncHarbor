@@ -48,31 +48,33 @@ TEST(RequestHandleUnitTest, MoveConstructorTransfersResourcesAndNullsSource) {
 TEST(RequestHandleUnitTest, SetFileStreamInAndScheduleRetryResetsStream) {
     auto path = std::filesystem::path("tmp_in.bin");
     {
-        std::ofstream out(path, std::ios::binary);
-        out << "hello";
+        {
+            std::ofstream out(path, std::ios::binary);
+            out << "hello";
+        }
+    
+        RequestHandle rh;
+        ASSERT_NO_THROW(rh.setFileStream(path, std::ios::in));
+        EXPECT_TRUE(rh._iofd.is_open());
+    
+        EXPECT_NO_THROW(rh.scheduleRetry());
     }
-
-    RequestHandle rh;
-    ASSERT_NO_THROW(rh.setFileStream(path, std::ios::in));
-    EXPECT_TRUE(rh._iofd.is_open());
-
-    EXPECT_NO_THROW(rh.scheduleRetry());
-
     std::filesystem::remove(path);
 }
 
 TEST(RequestHandleUnitTest, SetFileStreamOutAndScheduleRetryResetsStream) {
     auto path = std::filesystem::path("tmp_out.bin");
     {
-        std::ofstream out(path, std::ios::binary);
-        out << "data";
+        {
+            std::ofstream out(path, std::ios::binary);
+            out << "data";
+        }
+
+        RequestHandle rh;
+        ASSERT_NO_THROW(rh.setFileStream(path, std::ios::out));
+        EXPECT_TRUE(rh._iofd.is_open());
+        EXPECT_NO_THROW(rh.scheduleRetry());
     }
-
-    RequestHandle rh;
-    ASSERT_NO_THROW(rh.setFileStream(path, std::ios::out));
-    EXPECT_TRUE(rh._iofd.is_open());
-    EXPECT_NO_THROW(rh.scheduleRetry());
-
     std::filesystem::remove(path);
 }
 
@@ -88,25 +90,29 @@ TEST(RequestHandleUnitTest, WriteCallbackAppendsCorrectly) {
 
 TEST(RequestHandleUnitTest, ReadDataReadsWholeFile) {
     auto path = std::filesystem::path("tmp_read.txt");
-    std::ofstream(path, std::ios::binary) << "12345";
-    std::ifstream in(path, std::ios::binary);
-    char buf[10];
-    size_t got = RequestHandle::readData(buf, 1, 5, &in);
-    EXPECT_EQ(got, 5u);
-    EXPECT_EQ(std::string(buf, buf + got), "12345");
+    {
+        std::ofstream(path, std::ios::binary) << "12345";
+        std::ifstream in(path, std::ios::binary);
+        char buf[10];
+        size_t got = RequestHandle::readData(buf, 1, 5, &in);
+        EXPECT_EQ(got, 5u);
+        EXPECT_EQ(std::string(buf, buf + got), "12345");
+    }
     std::filesystem::remove(path);
 }
 
 TEST(RequestHandleUnitTest, WriteDataWritesToFile) {
     auto path = std::filesystem::path("tmp_write.txt");
-    std::ofstream out(path, std::ios::binary);
-    const char data[] = "abcde";
-    size_t wr = RequestHandle::writeData((void*)data, 1, 5, &out);
-    out.close();
-    EXPECT_EQ(wr, 5u);
-    std::ifstream in(path, std::ios::binary);
-    std::string read((std::istreambuf_iterator<char>(in)), {});
-    EXPECT_EQ(read, "abcde");
+    {
+        std::ofstream out(path, std::ios::binary);
+        const char data[] = "abcde";
+        size_t wr = RequestHandle::writeData((void*)data, 1, 5, &out);
+        out.close();
+        EXPECT_EQ(wr, 5u);
+        std::ifstream in(path, std::ios::binary);
+        std::string read((std::istreambuf_iterator<char>(in)), {});
+        EXPECT_EQ(read, "abcde");
+    }
     std::filesystem::remove(path);
 }
 
@@ -126,9 +132,11 @@ TEST(RequestHandleUnitTest, SetFileStreamThrowsOnMissingFile) {
 
 TEST(RequestHandleUnitTest, SetFileStreamSucceedsOnExistingFile) {
     auto path = std::filesystem::path("tmp_exist.txt");
-    std::ofstream(path) << "ok";
-    RequestHandle rh;
-    EXPECT_NO_THROW(rh.setFileStream(path, std::ios::in));
+    {
+        std::ofstream(path) << "ok";
+        RequestHandle rh;
+        EXPECT_NO_THROW(rh.setFileStream(path, std::ios::in));
+    }
     std::filesystem::remove(path);
 }
 

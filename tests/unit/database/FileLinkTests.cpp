@@ -68,9 +68,9 @@ TEST_F(DatabaseUnitTest, get_cloud_file_id_by_cloud_idThrows) {
 }
 
 TEST_F(DatabaseUnitTest, MissingPathPartAllExistsReturnsEmpty) {
-    FileRecordDTO d1{ EntryType::Directory, "a",      0,0,0, 10 };
-    FileRecordDTO d2{ EntryType::Directory, "a/b",    0,0,0, 11 };
-    FileRecordDTO f3{ EntryType::File,      "a/b/c.txt", 1,1,1, 12 };
+    FileRecordDTO d1{ EntryType::Directory, std::filesystem::path{"a"},         0,0,0, 10 };
+    FileRecordDTO d2{ EntryType::Directory, std::filesystem::path{"a/b"},       0,0,0, 11 };
+    FileRecordDTO f3{ EntryType::File,      std::filesystem::path{"a/b/c.txt"}, 1,1,1, 12 };
     int cid = db->add_cloud("c", CloudProviderType::Dropbox, nlohmann::json::object());
     int g1 = db->add_file(d1);
     int g2 = db->add_file(d2);

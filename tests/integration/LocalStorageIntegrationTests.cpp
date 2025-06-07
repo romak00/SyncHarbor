@@ -235,7 +235,10 @@ TEST_F(LocalStorageIntegrationTest, DetectCreateDirectory) {
 TEST_F(LocalStorageIntegrationTest, DetectNestedCreate) {
     Logger::get().addLogFile("DetectNestedCreate", "SyncHarbor.DetectNestedCreate.log");
     auto dir1 = tmp_dir / "x";
+    std::this_thread::sleep_for(100ms);
+
     std::filesystem::create_directories(dir1);
+
     std::this_thread::sleep_for(100ms);
 
     auto file = dir1 / "inside.txt";
