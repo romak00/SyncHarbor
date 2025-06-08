@@ -138,7 +138,7 @@ private:
         ICommand*                   parent,
         int                         src_cloud_id
     ) {
-        ICommand* child;
+        ICommand* child = parent;
         if constexpr (std::is_base_of_v<LocalCommand, Cmd>) {
             auto cmd = std::make_unique<Cmd>(0);
             cmd->setOwner(change);

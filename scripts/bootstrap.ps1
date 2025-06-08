@@ -17,7 +17,7 @@ if ($UseVcpkg) {
         .\bootstrap-vcpkg.bat
         Pop-Location
     }
-    & third_party\vcpkg\vcpkg install curl sqlite3
+    & third_party\vcpkg\vcpkg install curl sqlite3 openssl
 }
 else {
     choco install git cmake curl sqlite sqlite3 --yes
