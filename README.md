@@ -106,3 +106,24 @@ syncharbor --show-data-dir <profile_name>   # print the profile's data directory
 The helper script is simply a convenience wrapper around `ctest` that groups
 tests by fixture.
 
+---
+
+## 4. Supported Cloud Providers (as of June 2025)
+
+At the time of this writing, SyncHarbor includes built-in support for the following cloud storage services:
+
+- **Google Drive**
+- **Dropbox**
+
+
+### Extending to New Providers
+
+To add support for a new cloud storage provider, you must:
+
+1. **Implement an adapter**  
+   Create a subclass of the `BaseStorage` class and provide concrete implementations for all required methods.
+
+2. **Register the provider**  
+   Add the new provider’s basic information to `cloud-registry.h` (provider name, unique identifier, basic app creds).
+
+Once these steps are complete, SyncHarbor will recognize and be able to sync with the new provider.

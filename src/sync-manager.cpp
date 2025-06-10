@@ -582,16 +582,7 @@ void SyncManager::handleChange(std::shared_ptr<Change> incoming) {
     }
     else {
         LOG_DEBUG("SyncManager", "Change already exists for path: %s", path.c_str());
-
-        if (_current_changes[path]->getCloudId() == incoming->getCloudId() &&
-            _current_changes[path]->getType() == ChangeType::Update && incoming->getType() == ChangeType::Move)
-        {
-            LOG_DEBUG("SyncManager", "Merging Move into existing Update change for path: %s", path.c_str());
-            _current_changes[path]->addDependent(std::move(incoming));
-        }
-        else if (_current_changes[path]->getType() == ChangeType::New && incoming->getType() == ChangeType::New) {
-            return;
-        }
+        _current_changes[path]->addDependent(std::move(incoming));
     }
 }
 
